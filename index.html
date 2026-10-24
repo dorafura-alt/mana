@@ -336,6 +336,10 @@
     <input type="text" id="weatherPlace" autocomplete="off" placeholder="例：東京、大阪市">
     <p class="note">画面の左（スマホは上）に、この場所の天気が出るよ。</p>
 
+    <label for="morningTime">朝のあいさつの時刻</label>
+    <input type="time" id="morningTime">
+    <p class="note">この時刻にマナが開いていたら、「おはよう」と今日の天気・予定・ニュースを話すよ。空にすると、しない。PCは見張り役が開いてくれる（時刻は見張り役の config.txt の MORNING）。</p>
+
     <label for="sensitivity">拍手の感度：<span id="sensitivityValue"></span></label>
     <input type="range" id="sensitivity" min="1" max="10" step="1">
     <p class="note">反応しないときは上げる、話し声で起きちゃうときは下げる。</p>
@@ -459,7 +463,15 @@ const settings = {
   syncPass: store.get("syncPass", ""),
   calUrl: store.get("calUrl", ""),
   calKey: store.get("calKey", ""),
+  morningTime: store.get("morningTime", "07:35"),
 };
+
+// りゅうさんの希望で、朝のあいさつは7時35分（一度だけ書きかえる。あとから設定で変えられる）
+if (store.get("morningFix", "") !== "0735") {
+  settings.morningTime = "07:35";
+  store.set("morningTime", "07:35");
+  store.set("morningFix", "0735");
+}
 
 // ほかの端末との共有の状態（中身は「ほかの端末と共有」のところ）
 const sync = { busy: false, again: false, timer: 0, suppress: false, key: null, keyFor: "", gistId: store.get("syncGist", "") };
@@ -1158,8 +1170,28 @@ const openedByWatcher = new URLSearchParams(location.search).has("wake");
 async function wakeFromWatcher() {
   voice.unlock();
   await turnMicOn();
-  wakeUp();
+  if (new URLSearchParams(location.search).has("morning") && store.get("lastMorning", "") !== new Date().toDateString()) morningBriefing();
+  else wakeUp();
 }
+
+// ===== 朝のあいさつ =====
+// 決めた時刻に、今日の天気・予定・ニュースをまとめて話す（1日1回）
+const MORNING_TEXT = "おはよう。朝のあいさつをして。今日の天気と、今日の予定と、主なニュースを3つくらい教えて。";
+function morningBriefing() {
+  store.set("lastMorning", new Date().toDateString());
+  if (awake) {
+    ear.stop();
+    handleUserText(MORNING_TEXT, micOn);
+  } else {
+    wakeUp(MORNING_TEXT, micOn);
+  }
+}
+setInterval(() => {
+  if (!settings.morningTime || sending) return;
+  const now = new Date();
+  const hm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  if (hm === settings.morningTime && store.get("lastMorning", "") !== now.toDateString()) morningBriefing();
+}, 20000);
 
 $("wakeBtn").addEventListener("click", () => {
   voice.unlock();
@@ -1235,7 +1267,8 @@ function systemPrompt() {
 - 天気を聞かれたら get_weather を使います。場所を言われなかったら「${settings.weatherPlace || "金沢市"}」の天気を調べます（聞き返さない）。
 - 「〇分はかって」「〇時に教えて」と頼まれたら set_timer を使い、止めてと言われたら cancel_timer を使います。秒数は今の時刻から計算します。
 - 「明日10時に歯医者」のように予定を言われたら add_event で保存し、消してと言われたら delete_event を使います。数分〜数時間後に一度知らせるだけならタイマー、日時の決まった用事なら予定にします。
-- 予定を聞かれたら、下の「予定」を見て答えます。${calendarOn() ? "\n- 予定にはGoogleカレンダーの予定も入っています。add_event で足すとGoogleカレンダーにも入り、delete_event で消すとGoogleカレンダーからも消えます。" : ""}
+- 予定を聞かれたら、下の「予定」を見て答えます。
+- 朝のあいさつを頼まれたら、get_weather で今日の天気、下の「予定」から今日の予定、get_news（主要）から大事そうなニュースを3つくらい、合わせて短くまとめて話します。${calendarOn() ? "\n- 予定にはGoogleカレンダーの予定も入っています。add_event で足すとGoogleカレンダーにも入り、delete_event で消すとGoogleカレンダーからも消えます。" : ""}
 
 # 今の日時
 ${now.toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short" })}`;
@@ -2055,6 +2088,7 @@ function openSettings() {
   $("syncToken").value = settings.syncToken;
   $("syncPass").value = settings.syncPass;
   showSyncStatus();
+  $("morningTime").value = settings.morningTime;
   $("calUrl").value = settings.calUrl;
   $("calKey").value = settings.calKey;
   showCalStatus();
@@ -2180,6 +2214,8 @@ $("saveBtn").addEventListener("click", () => {
     sync.key = null;
     scheduleSync(300);
   }
+  settings.morningTime = $("morningTime").value;
+  store.set("morningTime", settings.morningTime);
   const calUrl = $("calUrl").value.trim();
   const calKey = $("calKey").value.trim();
   if (calUrl !== settings.calUrl || calKey !== settings.calKey) {
