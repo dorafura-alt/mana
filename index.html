@@ -400,6 +400,12 @@
     <button id="calNowBtn" type="button">今すぐ読み込む</button>
     <p class="note" id="calStatus"></p>
 
+    <label>データの書き出し・読み込み</label>
+    <button id="exportBtn" type="button">ファイルに書き出す</button>
+    <button id="importBtn" type="button">ファイルから読み込む</button>
+    <input type="file" id="importFile" accept=".json,application/json" hidden>
+    <p class="note" id="exportStatus">予定・覚えたこと・会話・天気の場所をファイルにして、別の端末や引っ越し先に移せるよ。キーや合言葉は入れないから、それは手で入れ直してね。読み込むと、今あるものに足される（消えない）。</p>
+
     <div class="row">
       <button id="closeBtn" type="button">閉じる</button>
       <button class="primary" id="saveBtn" type="button">保存</button>
@@ -2536,6 +2542,64 @@ async function refreshCalendar() {
     calBusy = false;
   }
 }
+
+// ===== データの書き出し・読み込み =====
+$("exportBtn").addEventListener("click", () => {
+  const data = {
+    app: "mana", v: 1, exportedAt: new Date().toISOString(),
+    memories, events, history, weatherPlace: settings.weatherPlace,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  const d = new Date();
+  a.href = URL.createObjectURL(blob);
+  a.download = `mana-data-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  $("exportStatus").textContent = `書き出したよ（${a.download}）。ダウンロードのフォルダに入ってるはず。`;
+});
+
+$("importBtn").addEventListener("click", () => $("importFile").click());
+$("importFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "mana") throw new Error("マナのファイルじゃないみたい");
+    const before = { m: memories.length, e: events.length, h: history.length };
+    const mergedMemories = mergeList(memories, data.memories || [], memKey, {});
+    mergedMemories.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    fixIds(mergedMemories);
+    const mergedEvents = mergeList(events, (data.events || []).filter((x) => x.endOfDay >= Date.now()), eventKey, {});
+    fixIds(mergedEvents);
+    const historyMap = new Map();
+    for (const h of [...(data.history || []), ...history]) historyMap.set(historyKey(h), h);
+    const mergedHistory = [...historyMap.values()].sort((a, b) => (a.t || 0) - (b.t || 0)).slice(-MAX_SAVED);
+    memories.splice(0, memories.length, ...mergedMemories);
+    saveMemories();
+    events.splice(0, events.length, ...mergedEvents);
+    saveEvents();
+    history.splice(0, history.length, ...mergedHistory);
+    saveHistory();
+    if (data.weatherPlace && data.weatherPlace !== settings.weatherPlace) {
+      settings.weatherPlace = data.weatherPlace;
+      store.set("weatherPlace", data.weatherPlace);
+      $("weatherPlace").value = data.weatherPlace;
+      refreshWeather();
+    }
+    if (!awake) {
+      $("log").innerHTML = "";
+      showSavedHistory();
+    }
+    $("exportStatus").textContent = `読み込んだよ。覚えたこと +${memories.length - before.m}、予定 +${events.length - before.e}、会話 +${history.length - before.h}。`;
+  } catch (err) {
+    console.error(err);
+    $("exportStatus").textContent = "読み込めなかった（" + err.message + "）。マナで書き出したファイルを選んでね。";
+  }
+});
 
 $("calNowBtn").addEventListener("click", () => {
   $("calStatus").textContent = "読み込んでる…";
