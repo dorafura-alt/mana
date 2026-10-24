@@ -382,6 +382,15 @@
     <button id="clearHistoryBtn" type="button">会話の履歴を消す</button>
     <p class="note">消すと前の会話の続きは話せなくなるよ（覚えていることは消えない）。</p>
 
+    <label>ほかの端末と共有（予定・覚えたこと・会話）</label>
+    <label for="syncToken">GitHubのトークン</label>
+    <input type="password" id="syncToken" autocomplete="off" placeholder="ghp_...">
+    <label for="syncPass">共有の合言葉</label>
+    <input type="password" id="syncPass" autocomplete="off" placeholder="ほかの端末と同じ合言葉">
+    <p class="note">どの端末にも同じトークンと合言葉を入れると、中身がそろうよ。合言葉で鍵をかけてから置くので、合言葉を知らない人には読めない。合言葉を忘れると元に戻せないので、メモしておいてね。</p>
+    <button id="syncNowBtn" type="button">今すぐ共有</button>
+    <p class="note" id="syncStatus"></p>
+
     <div class="row">
       <button id="closeBtn" type="button">閉じる</button>
       <button class="primary" id="saveBtn" type="button">保存</button>
@@ -431,7 +440,12 @@ const settings = {
   elevenModel: store.get("elevenModel", "eleven_v4"),
   useEleven: store.get("useEleven", "0") === "1", // 料金を抑えるため、初期値は端末の声
   weatherPlace: store.get("weatherPlace", "金沢市"),
+  syncToken: store.get("syncToken", ""),
+  syncPass: store.get("syncPass", ""),
 };
+
+// ほかの端末との共有の状態（中身は「ほかの端末と共有」のところ）
+const sync = { busy: false, again: false, timer: 0, suppress: false, key: null, keyFor: "", gistId: store.get("syncGist", "") };
 
 // りゅうさんの希望で、天気はいつも金沢市（一度だけ書きかえる。あとから設定で変えることもできる）
 if (store.get("weatherFix", "") !== "kanazawa1") {
@@ -1161,11 +1175,13 @@ function loadList(key) {
 function saveHistory() {
   if (history.length > MAX_SAVED) history.splice(0, history.length - MAX_SAVED);
   store.set("history", JSON.stringify(history));
+  scheduleSync();
 }
 
 function saveMemories() {
   store.set("memories", JSON.stringify(memories));
   renderMemories();
+  scheduleSync();
 }
 
 function addMessage(kind, text) {
@@ -1495,6 +1511,7 @@ function saveEvents() {
   store.set("events", JSON.stringify(events));
   renderEvents();
   renderPlans();
+  scheduleSync();
 }
 
 function describeEvent(e) {
@@ -1563,6 +1580,7 @@ function addEvent(input) {
     // もう知らせる時刻を過ぎているときは、知らせない
     notified: remindAt <= Date.now(),
     before: tm ? before : 0,
+    ts: Date.now(),
   };
   events.push(event);
   saveEvents();
@@ -1773,7 +1791,7 @@ async function runTool(block) {
     const fact = typeof input.fact === "string" ? input.fact.trim() : "";
     if (!fact) return { content: "覚える内容が空でした。", is_error: true };
     const id = memories.reduce((max, m) => Math.max(max, m.id), 0) + 1;
-    memories.push({ id, text: fact, at: new Date().toLocaleDateString("ja-JP") });
+    memories.push({ id, text: fact, at: new Date().toLocaleDateString("ja-JP"), ts: Date.now() });
     saveMemories();
     addMessage("note", "📝 覚えた：" + fact);
     return { content: `番号${id}で保存しました。` };
@@ -1879,7 +1897,8 @@ async function send(text) {
     } else {
       if (!reply) bubble.textContent = reply = "（返事が空だったよ）";
       // 保存するのは文だけ（考えた跡やツールのやりとりは残さない）
-      history.push({ role: "user", content: text }, { role: "assistant", content: reply });
+      const t = Date.now();
+      history.push({ role: "user", content: text, t }, { role: "assistant", content: reply, t: t + 1 });
       saveHistory();
       result = reply;
     }
@@ -1961,6 +1980,9 @@ function openSettings() {
   $("voiceId").value = settings.voiceId;
   $("elevenModel").value = settings.elevenModel;
   $("weatherPlace").value = settings.weatherPlace;
+  $("syncToken").value = settings.syncToken;
+  $("syncPass").value = settings.syncPass;
+  showSyncStatus();
   $("rateValue").textContent = settings.rate;
   fillVoices();
   renderMemories();
@@ -2010,6 +2032,7 @@ $("clearHistoryBtn").addEventListener("click", () => {
     return;
   }
   history.length = 0;
+  store.set("historyClearedAt", String(Date.now())); // ほかの端末の分も消すため
   saveHistory();
   $("log").innerHTML = "";
   btn.textContent = "消したよ";
@@ -2072,6 +2095,16 @@ $("saveBtn").addEventListener("click", () => {
     refreshWeather();
   }
   voice.elevenFailed = false; // 設定を変えたらもう一度ElevenLabsを試す
+  const syncToken = $("syncToken").value.trim();
+  const syncPass = $("syncPass").value;
+  if (syncToken !== settings.syncToken || syncPass !== settings.syncPass) {
+    settings.syncToken = syncToken;
+    settings.syncPass = syncPass;
+    store.set("syncToken", syncToken);
+    store.set("syncPass", syncPass);
+    sync.key = null;
+    scheduleSync(300);
+  }
   store.set("apiKey", settings.apiKey);
   store.set("model", settings.model);
   store.set("sensitivity", String(settings.sensitivity));
@@ -2333,6 +2366,257 @@ async function refreshWeather() {
   }
 }
 
+// ===== ほかの端末と共有（GitHubのGistに、合言葉で鍵をかけて置く） =====
+// 置くのは 予定・覚えたこと・会話。消したものは「消した印（tomb）」を残して、ほかの端末でも消す
+const SYNC_FILE = "mana-sync.json";
+const TOMB_DAYS = 90; // 消した印を残しておく日数
+
+function syncOn() {
+  return Boolean(settings.syncToken && settings.syncPass);
+}
+
+const memKey = (m) => "m:" + m.text;
+const eventKey = (e) => "e:" + e.title + "|" + e.startAt;
+const historyKey = (h) => (h.t || 0) + "|" + h.role + "|" + h.content;
+
+function scheduleSync(delay = 4000) {
+  if (!syncOn() || sync.suppress) return;
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(runSync, delay);
+}
+
+function showSyncStatus(text) {
+  if (text) store.set("syncStatus", text);
+  const el = $("syncStatus");
+  if (el) el.textContent = syncOn() ? store.get("syncStatus", "まだ共有してないよ") : "トークンと合言葉を入れると共有が始まるよ。";
+}
+
+function toBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let text = "";
+  for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(text);
+}
+
+function fromBase64(text) {
+  return Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+}
+
+// 合言葉から鍵を作る（時間がかかるので、同じ合言葉なら作り直さない）
+async function syncKeyFor(salt) {
+  const id = settings.syncPass + "|" + toBase64(salt);
+  if (sync.key && sync.keyFor === id) return sync.key;
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(settings.syncPass), "PBKDF2", false, ["deriveKey"]);
+  sync.key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  sync.keyFor = id;
+  return sync.key;
+}
+
+async function lockData(data, salt) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await syncKeyFor(salt);
+  const sealed = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(JSON.stringify(data)));
+  return JSON.stringify({ v: 1, salt: toBase64(salt), iv: toBase64(iv), data: toBase64(sealed) });
+}
+
+async function unlockData(text) {
+  const box = JSON.parse(text);
+  const salt = fromBase64(box.salt);
+  const key = await syncKeyFor(salt);
+  try {
+    const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromBase64(box.iv) }, key, fromBase64(box.data));
+    return { data: JSON.parse(new TextDecoder().decode(plain)), salt };
+  } catch {
+    const err = new Error("wrong pass");
+    err.wrongPass = true;
+    throw err;
+  }
+}
+
+async function github(path, options = {}) {
+  const res = await fetch("https://api.github.com" + path, {
+    ...options,
+    cache: "no-store",
+    headers: {
+      Authorization: "Bearer " + settings.syncToken,
+      Accept: "application/vnd.github+json",
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+  });
+  if (!res.ok) {
+    const err = new Error("GitHub " + res.status);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+// 共有用のGistを探す（初めての端末は、前に別の端末が作ったものを見つける）
+async function findSyncGist() {
+  if (sync.gistId) return sync.gistId;
+  for (let page = 1; page <= 5; page++) {
+    const list = await github(`/gists?per_page=100&page=${page}`);
+    const hit = list.find((g) => g.files && g.files[SYNC_FILE]);
+    if (hit) {
+      sync.gistId = hit.id;
+      store.set("syncGist", hit.id);
+      return hit.id;
+    }
+    if (list.length < 100) break;
+  }
+  return "";
+}
+
+async function readSyncGist(id) {
+  const gist = await github(`/gists/${id}`);
+  const file = gist.files && gist.files[SYNC_FILE];
+  if (!file) return "";
+  if (!file.truncated) return file.content;
+  const res = await fetch(file.raw_url, { cache: "no-store" });
+  return res.text();
+}
+
+// 両方の端末のリストを合わせる。消した印のあるものは、印より後に足し直したものだけ残す
+function mergeList(local, remote, keyOf, tomb, combine) {
+  const map = new Map();
+  for (const item of remote) map.set(keyOf(item), item);
+  for (const item of local) {
+    const key = keyOf(item);
+    map.set(key, map.has(key) && combine ? combine(map.get(key), item) : item);
+  }
+  return [...map.values()].filter((item) => !(tomb[keyOf(item)] >= (item.ts || 0)));
+}
+
+// 番号（マナが「番号3を消す」などに使う）が重なったら、付け直す
+function fixIds(list) {
+  const used = new Set();
+  let max = list.reduce((m, x) => Math.max(m, Number(x.id) || 0), 0);
+  for (const item of list) {
+    if (!item.id || used.has(item.id)) item.id = ++max;
+    used.add(item.id);
+  }
+}
+
+async function runSync() {
+  if (!syncOn()) return;
+  if (sync.busy) {
+    sync.again = true;
+    return;
+  }
+  sync.busy = true;
+  try {
+    let id = await findSyncGist();
+    let remote = { memories: [], events: [], history: [], tomb: {}, clearedAt: 0 };
+    let salt = crypto.getRandomValues(new Uint8Array(16));
+    let remoteText = "";
+    if (id) {
+      try {
+        remoteText = await readSyncGist(id);
+      } catch (err) {
+        if (err.status !== 404) throw err;
+        // Gistが消されていたら、作り直す
+        sync.gistId = "";
+        store.set("syncGist", "");
+        id = await findSyncGist();
+        if (id) remoteText = await readSyncGist(id);
+      }
+    }
+    if (remoteText) {
+      const opened = await unlockData(remoteText); // 合言葉が違うときはここで止まる（上書きしない）
+      remote = { ...remote, ...opened.data };
+      salt = opened.salt;
+    }
+
+    // この端末で前回の共有から消したものに、消した印を付ける
+    const now = Date.now();
+    const tomb = { ...(remote.tomb || {}) };
+    let seen = [];
+    try { seen = JSON.parse(store.get("syncSeen", "[]")); } catch { /* 読めなければ印なし */ }
+    const here = new Set([...memories.map(memKey), ...events.map(eventKey)]);
+    for (const key of seen) if (!here.has(key)) tomb[key] = Math.max(tomb[key] || 0, now);
+    for (const key of Object.keys(tomb)) if (tomb[key] < now - TOMB_DAYS * 86400000) delete tomb[key];
+
+    const mergedMemories = mergeList(memories, remote.memories || [], memKey, tomb);
+    mergedMemories.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    fixIds(mergedMemories);
+    const mergedEvents = mergeList(events, remote.events || [], eventKey, tomb, (a, b) => ({ ...b, notified: a.notified || b.notified }));
+    mergedEvents.sort((a, b) => a.startAt - b.startAt);
+    fixIds(mergedEvents);
+
+    const clearedAt = Math.max(Number(store.get("historyClearedAt", "0")) || 0, remote.clearedAt || 0);
+    const historyMap = new Map();
+    for (const h of [...(remote.history || []), ...history]) historyMap.set(historyKey(h), h);
+    let mergedHistory = [...historyMap.values()].filter((h) => !clearedAt || (h.t || 0) > clearedAt);
+    mergedHistory.sort((a, b) => (a.t || 0) - (b.t || 0));
+    mergedHistory = mergedHistory.slice(-MAX_SAVED);
+
+    // この端末に入れる（ここで保存しても、もう一度共有しないように止めておく）
+    const historyChanged = mergedHistory.length !== history.length || mergedHistory.some((h, i) => historyKey(h) !== historyKey(history[i]));
+    sync.suppress = true;
+    try {
+      memories.splice(0, memories.length, ...mergedMemories);
+      saveMemories();
+      events.splice(0, events.length, ...mergedEvents);
+      saveEvents();
+      history.splice(0, history.length, ...mergedHistory);
+      saveHistory();
+      store.set("historyClearedAt", String(clearedAt));
+    } finally {
+      sync.suppress = false;
+    }
+    if (historyChanged && !awake && history.length) {
+      $("log").innerHTML = "";
+      showSavedHistory();
+    }
+
+    // 変わったところがあればGistに置く
+    const payload = { memories: mergedMemories, events: mergedEvents, history: mergedHistory, tomb, clearedAt };
+    const sameAsRemote = remoteText && JSON.stringify(payload) === JSON.stringify({ memories: remote.memories, events: remote.events, history: remote.history, tomb: remote.tomb, clearedAt: remote.clearedAt });
+    if (!sameAsRemote) {
+      const content = await lockData(payload, salt);
+      const files = { [SYNC_FILE]: { content } };
+      if (id) {
+        await github(`/gists/${id}`, { method: "PATCH", body: JSON.stringify({ files }) });
+      } else {
+        const created = await github("/gists", { method: "POST", body: JSON.stringify({ description: "マナの共有データ（合言葉で鍵つき）", public: false, files }) });
+        sync.gistId = created.id;
+        store.set("syncGist", created.id);
+      }
+    }
+    store.set("syncSeen", JSON.stringify([...mergedMemories.map(memKey), ...mergedEvents.map(eventKey)]));
+    const t = new Date();
+    showSyncStatus(`共有した（${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}）`);
+  } catch (err) {
+    console.error(err);
+    if (err.wrongPass) showSyncStatus("合言葉がほかの端末と違うみたい。同じ合言葉を入れてね。");
+    else if (err.status === 401) showSyncStatus("GitHubのトークンが違うか、期限が切れてるみたい。");
+    else if (err.status === 403 || err.status === 404) showSyncStatus("トークンにGistを使う許可がないみたい（gist にチェックして作り直してね）。");
+    else showSyncStatus("共有できなかった（ネットにつながってないかも）。あとでもう一度やるね。");
+  } finally {
+    sync.busy = false;
+    if (sync.again) {
+      sync.again = false;
+      scheduleSync(1000);
+    }
+  }
+}
+
+$("syncNowBtn").addEventListener("click", () => {
+  if (!syncOn()) {
+    showSyncStatus();
+    return;
+  }
+  $("syncStatus").textContent = "共有してる…";
+  scheduleSync(0);
+});
+// ほかの端末で変えた分を取りにいく：この画面に戻ってきたときと、3分ごと
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") scheduleSync(500);
+});
+setInterval(() => {
+  if (document.visibilityState === "visible") scheduleSync(0);
+}, 3 * 60000);
+
 updateClock();
 setInterval(() => {
   updateClock();
@@ -2349,6 +2633,7 @@ refreshWeather();
 renderTimers();
 cleanOldEvents();
 renderEvents();
+scheduleSync(800);
 if (!settings.apiKey) openSettings();
 else if (openedByWatcher) wakeFromWatcher();
 </script>
