@@ -1,0 +1,2352 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>マナ</title>
+<!-- 数字と見出し用のSF風の文字（読み込めないときは、ふつうの文字で表示される） -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #05080f;
+    --panel: #0d1422;
+    --line: #1c2a44;
+    --text: #dce6f5;
+    --muted: #7d8aa3;
+    --accent: #37d6ff;
+    --accent-dim: #1b4d63;
+    --user: #1a2b47;
+    --danger: #ff6b6b;
+    --glow: 0 0 8px rgba(79, 209, 255, 0.55);
+    --hud-font: "Orbitron", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  /* 背景：JARVISと同じ、まんなかが明るい紺色（その上に電子回路の模様を重ねる） */
+  html { background: radial-gradient(circle at 50% 40%, #06263a, #020b14 70%); }
+  body {
+    color: var(--text);
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid #0a7ea4;
+    background: rgba(2, 11, 20, 0.88);
+  }
+  header > div:first-child { display: flex; align-items: center; gap: 10px; }
+  header h1 { font-family: var(--hud-font); font-size: 18px; margin: 0; letter-spacing: 0.3em; color: var(--accent); text-shadow: var(--glow); }
+  #miniRing { width: 40px; height: 40px; flex: none; }
+  header .state { font-size: 12px; color: var(--muted); }
+  header button { margin-left: 8px; }
+  button {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button.primary { background: var(--accent-dim); border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  /* 待機画面（拍手を待っているとき） */
+  #sleep {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 16px;
+    text-align: center;
+  }
+  /* ===== まんなかの光る輪（前に作ったJARVISの輪） ===== */
+  .orb { position: relative; width: min(440px, 36vw, 58vh); aspect-ratio: 1; transition: transform 0.15s, filter 0.15s; }
+  .orb canvas { position: absolute; inset: -5%; width: 110%; height: 110%; pointer-events: none; }
+  .orb.flash { transform: scale(1.06); filter: brightness(1.6); }
+  /* ふわっと明るくなったり暗くなったりする文字 */
+  @keyframes blink {
+    0%, 100% { text-shadow: 0 0 6px var(--accent), 0 0 14px #0a7ea4; opacity: 0.85; }
+    50% { text-shadow: 0 0 6px #fff, 0 0 14px var(--accent), 0 0 28px var(--accent), 0 0 48px var(--accent); opacity: 1; }
+  }
+  header h1, #modeLabel { animation: blink 3.4s ease-in-out infinite; }
+  #modeLabel { font-family: var(--hud-font); color: var(--accent); font-size: 19px; font-weight: 600; letter-spacing: 0.25em; min-height: 28px; }
+
+  /* 背景の電子回路の模様と、線の上を流れる光 */
+  .pcb { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+  @keyframes flow { to { stroke-dashoffset: -400; } }
+  .fl { fill: none; color: #37d6ff; stroke: currentColor; stroke-width: 2; stroke-dasharray: 30 370;
+        filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 10px currentColor); animation: flow 2.4s linear infinite; }
+  .fr { color: #ff3b4a; }
+  .fg { color: #a6ff3c; }
+  @media (prefers-reduced-motion: reduce) {
+    .fl, header h1, #modeLabel { animation: none; }
+  }
+
+  /* ===== 画面の配置：左＝時計と天気、まんなか＝マナ、右＝予定とタイマー ===== */
+  #hud { flex: 1; min-height: 0; display: grid; grid-template-columns: 250px 1fr minmax(320px, 400px); gap: 16px; padding: 16px; }
+  .hud-side.left { overflow-y: auto; }
+  #center { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); background: rgba(2, 11, 20, 0.72); position: relative; }
+  /* 会話中は文字が読みやすいように、背景を濃くする */
+
+  .hud-side { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+  .panel { position: relative; border: 1px solid #0a7ea4; background: rgba(2, 16, 28, 0.82); padding: 12px 14px; }
+  /* 角だけ明るい線（HUDの枠） */
+  .panel::before, .panel::after, #center::before, #center::after {
+    content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid var(--accent); pointer-events: none;
+  }
+  .panel::before, #center::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .panel::after, #center::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+  .panel-title { font-family: var(--hud-font); font-size: 11px; letter-spacing: 0.25em; color: var(--accent); margin-bottom: 8px; text-shadow: var(--glow); }
+  .big { font-family: var(--hud-font); font-size: 34px; font-weight: 600; color: var(--text); text-shadow: var(--glow); font-variant-numeric: tabular-nums; }
+  .sub { font-size: 13px; color: var(--muted); line-height: 1.7; }
+  .hud-list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+  .hud-list li { padding: 6px 0; border-bottom: 1px dashed var(--line); line-height: 1.5; }
+  .hud-list li:last-child { border-bottom: none; }
+  .hud-list .when { font-family: var(--hud-font); font-size: 12px; color: var(--accent); margin-right: 6px; }
+  #weatherNow { font-size: 22px; color: var(--text); }
+  .panel:has(#timers:empty) { display: none; }
+  .panel #timers { flex-direction: column; }
+  .panel .timer { border-radius: 6px; justify-content: space-between; }
+  .timer button { white-space: nowrap; }
+
+  /* スマホなど細い画面：上に小さな帯、まんなかを広く */
+  @media (max-width: 899px) {
+    #hud { display: flex; flex-direction: column; gap: 8px; padding: 8px; overflow-y: auto; }
+    #center { flex: none; }
+    .hud-side.left { flex: none; }
+    #sleep { padding: 8px; gap: 8px; }
+    .orb { width: min(64vw, 30vh); }
+    body.awake .orb { width: min(44vw, 22vh); }
+    #modeLabel { font-size: 15px; min-height: 20px; }
+    .hud-side.left { flex-direction: row; flex-wrap: wrap; gap: 8px; overflow: visible; }
+    .hud-side.left .panel { flex: 1 1 40%; padding: 6px 10px; }
+    .hud-side.right { flex: 1 0 auto; min-height: 40vh; }
+    body.awake .hud-side.right { min-height: 0; flex: 1 1 0; }
+    #sleepText { font-size: 14px; }
+    .panel-title { margin-bottom: 2px; font-size: 10px; }
+    .big { font-size: 20px; }
+    #date, #weatherDays { display: none; }
+    #weatherNow { font-size: 15px; }
+    .hud-list li:nth-child(n+2) { display: none; }
+    .hud-list li { padding: 0; font-size: 13px; }
+    /* 会話中は予定の帯をしまって、会話を広く見せる */
+    body.awake .hud-side.left .panel:nth-child(3) { display: none; }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.55; }
+  }
+  #sleep p { margin: 0; color: var(--muted); line-height: 1.7; }
+  .meter {
+    width: 220px;
+    height: 8px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .meter .level { height: 100%; width: 0; background: var(--accent); }
+  .meter .threshold { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); }
+
+  /* 会話画面 */
+  #chat { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 0 0; }
+  #chat .panel-title { padding: 0 14px; }
+  #sleepControls { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  body.awake #sleepControls { display: none; }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .msg.mana { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
+  .msg.note { align-self: center; color: var(--muted); background: transparent; font-size: 13px; padding: 2px 8px; }
+  .memory-list { list-style: none; padding: 0; margin: 6px 0 0; font-size: 14px; max-height: 160px; overflow-y: auto; }
+  .memory-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .memory-list button { padding: 2px 8px; font-size: 12px; }
+  .msg.error { align-self: center; color: var(--danger); background: transparent; font-size: 13px; }
+  #timers { display: flex; flex-wrap: wrap; gap: 8px; }
+  #timers:empty { display: none; }
+  .timer { display: flex; align-items: center; gap: 8px; padding: 4px 6px 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: 14px; }
+  .timer.ringing { border-color: var(--danger); color: var(--danger); }
+  .timer button { padding: 2px 8px; font-size: 12px; }
+  form#input {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+  }
+  #text {
+    flex: 1;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 16px;
+    resize: none;
+    font-family: inherit;
+  }
+
+  .heard { font-size: 13px; min-height: 1.5em; }
+  #voiceBtn { font-size: 18px; padding: 8px 12px; }
+  #voiceBtn.on { background: #5a1f2a; border-color: var(--danger); animation: breathe 1.5s ease-in-out infinite; }
+  dialog .check { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; font-size: 14px; }
+
+  /* 設定 */
+  dialog {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    width: min(440px, calc(100% - 32px));
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+  dialog label { display: block; margin: 14px 0 6px; font-size: 14px; }
+  dialog input[type=password], dialog input[type=text], dialog select {
+    width: 100%;
+    padding: 8px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 15px;
+  }
+  dialog input[type=range] { width: 100%; }
+  dialog .note { font-size: 12px; color: var(--muted); line-height: 1.6; margin: 6px 0 0; }
+  dialog .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<!-- 背景の電子回路（中身はあとで自動で描く） -->
+<svg class="pcb" id="pcb" aria-hidden="true"><g id="pcbBg"></g><g id="pcbFx"></g></svg>
+<header>
+  <div>
+    <canvas id="miniRing" width="120" height="120"></canvas>
+    <div>
+      <h1>MANA</h1>
+      <div class="state" id="state">マイクはオフ</div>
+    </div>
+  </div>
+  <div>
+    <button id="sleepBtn" type="button" hidden>おやすみ</button>
+    <button id="settingsBtn" type="button">設定</button>
+  </div>
+</header>
+
+<main id="hud">
+<aside class="hud-side left">
+  <div class="panel">
+    <div class="panel-title">TIME</div>
+    <div class="big" id="clock">--:--</div>
+    <div class="sub" id="date"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">WEATHER</div>
+    <div id="weatherNow">―</div>
+    <div class="sub" id="weatherDays">設定で場所を入れると、ここに天気が出るよ</div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">SCHEDULE</div>
+    <ul class="hud-list" id="planList"></ul>
+  </div>
+  <div class="panel">
+    <div class="panel-title">TIMER</div>
+    <!-- 動いているタイマー -->
+    <div id="timers"></div>
+  </div>
+</aside>
+
+<div id="center">
+<section id="sleep">
+  <div class="orb" id="orb"><canvas id="reactor" width="600" height="600"></canvas></div>
+  <div id="modeLabel">STANDBY</div>
+  <!-- 寝ているときだけ出す部分 -->
+  <div id="sleepControls">
+  <p id="sleepText">「マイクをオン」を押してね。<br>そのあと手を2回パンパンと叩くと起きるよ（設定で「マナ」と呼ぶ方法にも変えられる）。</p>
+  <p id="heard" class="heard"></p>
+  <div class="meter" title="マイクの音の大きさ（赤い線を超えると拍手として数える）">
+    <div class="level" id="level"></div>
+    <div class="threshold" id="thresholdMark"></div>
+  </div>
+  <div>
+    <button class="primary" id="micBtn" type="button">マイクをオン</button>
+    <button id="wakeBtn" type="button">叩かずに起こす</button>
+  </div>
+  </div>
+</section>
+</div>
+
+<!-- 会話はいつも右（スマホは下）に出す -->
+<aside class="hud-side right">
+<section id="chat" class="panel">
+  <div class="panel-title">LOG</div>
+  <div id="log"></div>
+  <form id="input">
+    <button id="voiceBtn" type="button" title="声で話しかける">🎤</button>
+    <textarea id="text" rows="1" placeholder="マナに話しかける"></textarea>
+    <button class="primary" id="sendBtn" type="button">送信</button>
+  </form>
+</section>
+</aside>
+</main>
+
+<dialog id="settings">
+  <form id="settingsForm">
+    <strong>設定</strong>
+
+    <label for="apiKey">Claude APIキー</label>
+    <input type="password" id="apiKey" autocomplete="off" placeholder="sk-ant-...">
+    <p class="note">キーはこの端末のブラウザの中だけに保存されるよ。チャットや人には見せないでね。</p>
+
+    <label for="model">使うモデル（Claudeの種類）</label>
+    <select id="model">
+      <option value="claude-haiku-5-5">Haiku 5.5（速くて安い・おすすめ）</option>
+      <option value="claude-sonnet-5-5">Sonnet 5.5（バランス型）</option>
+      <option value="claude-opus-5-5">Opus 5.5（いちばん賢い・高い）</option>
+    </select>
+    <p class="note">料金はモデルごとに違うよ。最新の値段は公式ページで確認してね。</p>
+
+    <label for="weatherPlace">天気を出す場所</label>
+    <input type="text" id="weatherPlace" autocomplete="off" placeholder="例：東京、大阪市">
+    <p class="note">画面の左（スマホは上）に、この場所の天気が出るよ。</p>
+
+    <label for="sensitivity">拍手の感度：<span id="sensitivityValue"></span></label>
+    <input type="range" id="sensitivity" min="1" max="10" step="1">
+    <p class="note">反応しないときは上げる、話し声で起きちゃうときは下げる。</p>
+
+    <label for="wakeMode">待っているときの起こし方</label>
+    <select id="wakeMode">
+      <option value="clap">拍手（パンパン2回）</option>
+      <option value="voice">「マナ」と呼ぶ</option>
+    </select>
+    <p class="note">スマホは拍手を聞くのと声を聞き取るのを同時にできないことが多いので、どちらか一つを選んでね。</p>
+    <label class="check"><input type="checkbox" id="speak">マナが声で返事する</label>
+
+    <label class="check"><input type="checkbox" id="useEleven">ElevenLabsの声（JARVISの声）を使う（有料）</label>
+    <p class="note">オフのときは端末の声で話すので無料だよ。</p>
+    <label for="elevenKey">ElevenLabs APIキー（なくてもOK）</label>
+    <input type="password" id="elevenKey" autocomplete="off" placeholder="入れるとElevenLabsの声で話す">
+    <label for="voiceId">ElevenLabsの声のID（VOICE_ID）</label>
+    <input type="text" id="voiceId" autocomplete="off">
+    <label for="elevenModel">ElevenLabsの声のモデル</label>
+    <select id="elevenModel">
+      <option value="eleven_v4">v4（JARVISの声に近い・おすすめ）</option>
+      <option value="eleven_v3">v3</option>
+      <option value="eleven_multilingual_v2">Multilingual v2（落ち着いた読み方）</option>
+      <option value="eleven_flash_v2_5">Flash v2.5（返事が速い）</option>
+    </select>
+    <p class="note">同じ声でもモデルで話し方の雰囲気が変わるよ。キーが空のときや、ElevenLabsがうまく使えないときは、下の端末の声で話すよ。</p>
+
+    <label for="voiceSelect">端末の声</label>
+    <select id="voiceSelect"></select>
+    <p class="note">選べる声は端末によって違うよ。</p>
+
+    <label for="rate">話す速さ：<span id="rateValue"></span></label>
+    <input type="range" id="rate" min="0.7" max="1.6" step="0.1">
+
+    <label>予定</label>
+    <ul class="memory-list" id="eventList"></ul>
+    <p class="note">「明日10時に歯医者」と話しかけると増えるよ。予定はこの端末の中だけに保存されるよ。</p>
+
+    <label>マナが覚えていること</label>
+    <ul class="memory-list" id="memoryList"></ul>
+    <p class="note">「〇〇を覚えておいて」「〇〇は忘れて」と話しかけると増えたり消えたりするよ。</p>
+
+    <label>会話の履歴</label>
+    <button id="clearHistoryBtn" type="button">会話の履歴を消す</button>
+    <p class="note">消すと前の会話の続きは話せなくなるよ（覚えていることは消えない）。</p>
+
+    <div class="row">
+      <button id="closeBtn" type="button">閉じる</button>
+      <button class="primary" id="saveBtn" type="button">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module">
+import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.132.0/+esm";
+
+// ===== マナの性格（ここを書き換えると話し方が変わる） =====
+const SYSTEM_PROMPT = `あなたは「マナ」という名前のAIアシスタントです。
+持ち主の「りゅうさん」と日本語で会話します。
+- 相手を呼ぶときは必ず「りゅうさん」と呼びます（「りゅう」と呼び捨てにしません）。
+- 口調はフランクで親しみやすく、敬語は使いません。
+- 返事は短めにまとめ、聞かれたことに直接答えます。
+- 分からないことや自信がないことは、正直にそう言います。
+- 返事は声で読み上げられることがあるので、記号・箇条書き・絵文字は使わず、話し言葉で書きます。
+- 読み上げで読み間違えられやすい言葉（読み方が何通りもある漢字など）は、ひらがなで書きます。`;
+
+// ===== 保存しておく設定 =====
+const store = {
+  get(key, fallback) {
+    try {
+      const value = localStorage.getItem("mana." + key);
+      return value === null ? fallback : value;
+    } catch {
+      return fallback;
+    }
+  },
+  set(key, value) {
+    try { localStorage.setItem("mana." + key, value); } catch { /* 保存できない環境では何もしない */ }
+  },
+};
+
+const settings = {
+  apiKey: store.get("apiKey", ""),
+  model: store.get("model", "claude-haiku-5-5"),
+  sensitivity: Number(store.get("sensitivity", "5")),
+  wakeMode: store.get("wakeMode", "clap"), // "clap"＝拍手で起こす、"voice"＝「マナ」で起こす
+  speak: store.get("speak", "1") === "1",
+  voiceURI: store.get("voiceURI", ""),
+  rate: Number(store.get("rate", "1.1")),
+  elevenKey: store.get("elevenKey", ""),
+  voiceId: store.get("voiceId", "aUM0nTgOk94KrCRLmzCZ"), // JARVISで作った「自然で明るい女性」の声
+  // りゅうさんの確認で、v4 がJARVISのときの声にいちばん近かった
+  elevenModel: store.get("elevenModel", "eleven_v4"),
+  useEleven: store.get("useEleven", "0") === "1", // 料金を抑えるため、初期値は端末の声
+  weatherPlace: store.get("weatherPlace", "金沢市"),
+};
+
+// りゅうさんの希望で、天気はいつも金沢市（一度だけ書きかえる。あとから設定で変えることもできる）
+if (store.get("weatherFix", "") !== "kanazawa1") {
+  settings.weatherPlace = "金沢市";
+  store.set("weatherPlace", "金沢市");
+  store.set("weatherFix", "kanazawa1");
+}
+
+// りゅうさんの希望で「ほぼ無料」に切り替え（一度だけ）。安いHaikuと端末の声にする
+if (store.get("plan", "") !== "free1") {
+  settings.model = "claude-haiku-5-5";
+  settings.useEleven = false;
+  store.set("model", settings.model);
+  store.set("useEleven", "0");
+  store.set("plan", "free1");
+}
+
+const $ = (id) => document.getElementById(id);
+
+// ===== 画面の切り替え =====
+let awake = false;
+
+function setState(text) {
+  $("state").textContent = text;
+}
+
+// firstText：「マナ、〇〇して」のように呼んだとき、〇〇の部分
+async function wakeUp(firstText = "", byVoice = true) {
+  if (awake) return;
+  awake = true;
+  document.body.classList.add("awake");
+  ear.stop();
+  if (ear.supported) clap.release();
+
+  $("sleepBtn").hidden = false;
+  setState("起きてるよ");
+  if (!settings.apiKey) {
+    addMessage("error", "まだAPIキーが入ってないよ。右上の「設定」から入れてね。");
+  }
+  if (firstText) {
+    handleUserText(firstText, byVoice);
+    return;
+  }
+  const greeting = "はーい、何する？";
+  addMessage("mana", greeting);
+  if (micOn) {
+    // 拍手や声で起きたときは、声で返事してそのまま話を聞く
+    await voice.speak(greeting);
+    if (awake) {
+      ear.touch();
+      ear.start("talk");
+    }
+  } else {
+    $("text").focus();
+  }
+}
+
+function goToSleep() {
+  // 見張り役から開いた窓は閉じて、また見張り役に拍手を待ってもらう
+  // （タイマーが動いているときは、鳴らせるように窓を残す）
+  if (openedByWatcher && timers.length === 0) {
+    voice.stop();
+    ear.stop();
+    clap.release();
+    // ページは自分の窓を閉じられない（ブラウザの決まり）ので、窓の名前を変えて見張り役に閉じてもらう
+    document.title = "MANA_SLEEP";
+    window.close();
+  }
+  awake = false;
+  document.body.classList.remove("awake");
+  voice.stop();
+  ear.stop();
+
+  $("sleepBtn").hidden = true;
+  showHeard("");
+  listenForWakeWord();
+}
+
+function listenForWakeWord() {
+  if (!micOn) {
+    setState("マイクはオフ");
+    return;
+  }
+  // 拍手を聞くマイクと声の聞き取りは同時に使えない端末が多いので、どちらか一方だけ動かす
+  if (settings.wakeMode === "voice" && ear.supported && !ear.blocked) {
+    clap.release();
+    ear.start("wake");
+    $("sleepText").textContent = "「マナ」と呼んでね。";
+    setState("「マナ」を待ってるよ");
+  } else {
+    ear.stop();
+    clap.resume().then(() => {
+      $("sleepText").textContent = "手を2回パンパンと叩いてね。";
+      setState("拍手を待ってるよ");
+    });
+  }
+}
+
+// ===== マナの声（読み上げ） =====
+// あとで高品質な音声サービスに差し替えるときは、この voice の中身だけ変えればいい
+const voice = {
+  speaking: false,
+  token: 0,
+  player: new Audio(), // ElevenLabsの声を鳴らすプレーヤー（iPhoneのため、ずっと同じものを使い回す）
+  elevenFailed: false,
+
+  available() {
+    return "speechSynthesis" in window;
+  },
+
+  useEleven() {
+    return settings.useEleven && Boolean(settings.elevenKey && settings.voiceId) && !this.elevenFailed;
+  },
+
+  // iPhoneなどは、ボタンを押したときに一度鳴らしておかないと、あとで声が出ないことがある
+  unlock() {
+    if (this.available()) speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+    try {
+      if (!beepCtx) beepCtx = new AudioContext();
+      beepCtx.resume().catch(() => {});
+    } catch { /* 音が出せない環境では何もしない */ }
+    this.player.src = SILENCE;
+    this.player.play().catch(() => {});
+  },
+
+  japaneseVoices() {
+    if (!this.available()) return [];
+    return speechSynthesis.getVoices().filter((v) => v.lang.replace("_", "-").toLowerCase().startsWith("ja"));
+  },
+
+  async speak(text) {
+    if (!settings.speak || !text) return;
+    this.stop();
+    const token = ++this.token;
+    this.speaking = true;
+    setState("話してるよ");
+    if (this.useEleven()) {
+      const ok = await this.speakEleven(text, token);
+      if (ok || token !== this.token) {
+        if (token === this.token) {
+          this.speaking = false;
+          if (awake) setState("起きてるよ");
+        }
+        return;
+      }
+      // うまくいかなかったときは、このあと端末の声で話す
+    }
+    if (!this.available()) {
+      this.speaking = false;
+      return;
+    }
+    // 長い文を一度に読ませると途中で止まるブラウザがあるので、文ごとに区切って読む
+    const sentences = cleanForSpeech(text).split(/(?<=[。！？!?\n])/).map((t) => t.trim()).filter(Boolean);
+    for (const sentence of sentences) {
+      if (token !== this.token) return; // 途中で止められた
+      await this.speakOne(sentence);
+    }
+    if (token === this.token) {
+      this.speaking = false;
+      if (awake) setState("起きてるよ");
+    }
+  },
+
+  // ElevenLabsに文を送って声にしてもらい、鳴らす。うまくいけば true
+  async speakEleven(text, token) {
+    try {
+      const res = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(settings.voiceId)}?output_format=mp3_44100_128`,
+        {
+          method: "POST",
+          headers: { "xi-api-key": settings.elevenKey, "Content-Type": "application/json" },
+          body: JSON.stringify({ text: cleanForSpeech(text), model_id: settings.elevenModel }),
+        },
+      );
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        console.error("ElevenLabs", res.status, detail);
+        this.elevenFailed = true; // 何度も失敗しないように、ページを開き直すまで端末の声にする
+        addNotice(
+          res.status === 401
+            ? "ElevenLabsのキーが違うみたい。しばらく端末の声で話すね。"
+            : `ElevenLabsが使えなかったよ（${res.status}）。しばらく端末の声で話すね。`,
+        );
+        return false;
+      }
+      const blob = await res.blob();
+      if (token !== this.token) return true; // 待っているあいだに止められた
+      const url = URL.createObjectURL(blob);
+      await new Promise((resolve) => {
+        this.player.onended = resolve;
+        this.player.onerror = resolve;
+        this.player.onpause = resolve;
+        this.player.src = url;
+        this.player.playbackRate = settings.rate;
+        this.player.play().catch(resolve);
+      });
+      URL.revokeObjectURL(url);
+      return true;
+    } catch (err) {
+      console.error(err);
+      this.elevenFailed = true;
+      addNotice("ElevenLabsにつながらなかったよ。しばらく端末の声で話すね。");
+      return false;
+    }
+  },
+
+  speakOne(sentence) {
+    return new Promise((resolve) => {
+      const u = new SpeechSynthesisUtterance(sentence);
+      u.lang = "ja-JP";
+      u.rate = settings.rate;
+      const chosen = this.japaneseVoices().find((v) => v.voiceURI === settings.voiceURI);
+      if (chosen) u.voice = chosen;
+      u.onend = resolve;
+      u.onerror = resolve;
+      speechSynthesis.speak(u);
+    });
+  },
+
+  stop() {
+    this.token++;
+    this.speaking = false;
+    if (this.available()) speechSynthesis.cancel();
+    this.player.pause();
+  },
+};
+
+// 0.1秒の無音（プレーヤーの準備用）
+const SILENCE = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=";
+
+// 端末の声が読み間違える言葉と、正しい読み（読み上げるときだけ置きかえる。画面の文はそのまま）
+// 読み間違いを見つけたら、ここに足していく
+const READINGS = {
+  "軽め": "かるめ", "重め": "おもめ", "多め": "おおめ", "少なめ": "すくなめ",
+  "早め": "はやめ", "遅め": "おそめ", "長め": "ながめ", "短め": "みじかめ",
+  "強め": "つよめ", "弱め": "よわめ", "高め": "たかめ", "低め": "ひくめ",
+  "薄め": "うすめ", "濃いめ": "こいめ", "甘め": "あまめ", "辛め": "からめ",
+  "太め": "ふとめ", "細め": "ほそめ", "浅め": "あさめ", "深め": "ふかめ",
+};
+const READING_PATTERN = new RegExp(Object.keys(READINGS).join("|"), "g");
+
+function cleanForSpeech(text) {
+  return text
+    .replace(/https?:\/\/\S+/g, "リンク")
+    .replace(/[#*`>_~|]/g, "")
+    .replace(READING_PATTERN, (word) => READINGS[word]);
+}
+
+// ===== 声の聞き取り =====
+// "wake"：寝ているあいだ「マナ」と呼ばれるのを待つ
+// "talk"：起きているときに、話しかけられた1回分を聞いて送る
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+// 「マナ」はいろんな字で聞き取られるので、よくある書き方をまとめて探す
+// 判定の前に「カタカナ→ひらがな」「空白や点を消す」をしてから探す（「マ ナ」「ま、な」なども拾うため）
+const WAKE_WORD = /(まな|まーな|まんな|まあな|真奈|愛菜|茉奈|麻奈|真菜|mana|manna)/i;
+
+function normalizeSpeech(text) {
+  return text
+    .replace(/[\u30a1-\u30f6]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60))
+    .replace(/[\s、。,.!！?？・ー～〜]+/g, (m) => (m.includes("ー") ? "ー" : ""));
+}
+const SLEEP_WORD = /(おやすみ|お休み)/;
+const IDLE_LIMIT = 30000; // 起きてから30秒なにも話しかけられなかったら、また寝る
+
+// 話しかけの途中で息つぎしても、これだけ黙るまでは続きを待つ（ミリ秒）
+const TALK_PAUSE = 1800;
+
+// 聞き取った切れはしをつなぐ。
+// Androidなどは、それまでの言葉を含んだ形で何度も届くので、重なる部分は1回分にする
+// （空白や「、」のつき方が違っても同じ言葉とみなす）
+function joinSpeech(pieces) {
+  let text = "";
+  for (const piece of pieces) {
+    const t = piece.trim();
+    if (!t) continue;
+    const a = normalizeSpeech(text);
+    const b = normalizeSpeech(t);
+    if (!b || a.includes(b)) continue;       // もう入っている言葉
+    if (!a || b.startsWith(a)) { text = t; continue; } // 前の言葉を含んだ新しい形
+    text += t;
+  }
+  return text;
+}
+
+const ear = {
+  supported: Boolean(Recognition),
+  blocked: false, // 聞き取りが許可されなかったら、もう試さない
+  rec: null,
+  mode: null,
+  lastActivity: 0,
+  wakeTimer: null,
+  // 話しかけ待ちで聞き取った言葉（聞き取りが切れてやり直しても、送るまではためておく）
+  saved: "",
+  sessionFinal: "",
+  sessionInterim: "",
+  pauseTimer: null,
+
+  start(mode) {
+    if (!this.supported || this.blocked) return;
+    // 聞き直すときは、それまでに聞き取った言葉を消さずに引きつぐ
+    const kept = mode === "talk" ? this.saved : "";
+    this.stop();
+    if (kept) {
+      this.saved = kept;
+      this.pauseTimer = setTimeout(() => this.finishTalk(), TALK_PAUSE);
+    }
+    const rec = new Recognition();
+    rec.lang = "ja-JP";
+    rec.interimResults = true;
+    // 区切りで止まらず聞き続ける（ゆっくり・早口どちらでも拾いやすくするため）
+    rec.continuous = true;
+    // 聞き取り候補を複数もらって、どれかに「マナ」が入っていれば起きる
+    rec.maxAlternatives = 5;
+    rec.onresult = (e) => this.onResult(e);
+    rec.onerror = (e) => this.onError(e);
+    rec.onend = () => this.onEnd();
+    this.rec = rec;
+    this.mode = mode;
+    if (mode === "talk" && !this.lastActivity) this.lastActivity = Date.now();
+    try {
+      rec.start();
+    } catch (err) {
+      console.error(err);
+    }
+    if (mode === "talk") setState("聞いてるよ…");
+    updateVoiceBtn();
+  },
+
+  stop() {
+    const rec = this.rec;
+    this.rec = null;
+    this.mode = null;
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+    this.clearSpeech();
+    if (rec) {
+      rec.onresult = rec.onerror = rec.onend = null;
+      try { rec.abort(); } catch { /* もう止まっている */ }
+    }
+    updateVoiceBtn();
+  },
+
+  // 話しかけが続いているあいだは、寝るまでの時間をのばす
+  touch() {
+    this.lastActivity = Date.now();
+  },
+
+  clearSpeech() {
+    clearTimeout(this.pauseTimer);
+    this.pauseTimer = null;
+    this.saved = this.sessionFinal = this.sessionInterim = "";
+  },
+
+  heardText() {
+    return joinSpeech([this.saved, this.sessionFinal, this.sessionInterim]);
+  },
+
+  onResult(e) {
+    if (this.mode === "wake") {
+      for (let i = e.resultIndex ?? 0; i < e.results.length; i++) {
+        if (this.checkWakeWord(e.results[i])) return;
+      }
+      return;
+    }
+    // 話しかけ待ち：区切りごとにすぐ送らず、全部つないでおく
+    // （「なかなか、」の「、」の間で送ってしまわないように）
+    const finals = [];
+    const interims = [];
+    for (let i = 0; i < e.results.length; i++) {
+      const result = e.results[i];
+      (result.isFinal ? finals : interims).push(result[0].transcript);
+    }
+    this.sessionFinal = joinSpeech(finals);
+    this.sessionInterim = joinSpeech(interims);
+    this.touch();
+    $("text").value = this.heardText();
+    // しばらく黙ったら、話し終わったとみなして送る
+    clearTimeout(this.pauseTimer);
+    this.pauseTimer = setTimeout(() => this.finishTalk(), TALK_PAUSE);
+  },
+
+  finishTalk() {
+    const text = this.heardText();
+    if (!text) return;
+    // 物音やテレビの声のかけらを、話しかけとまちがえないように
+    if (normalizeSpeech(text).length < 2) {
+      this.clearSpeech();
+      return;
+    }
+    $("text").value = "";
+    this.stop();
+    setState("起きてるよ");
+    handleUserText(text, true);
+  },
+
+  // 寝ているあいだ：聞こえた言葉に「マナ」が入っているか調べる。起きたら true
+  checkWakeWord(result) {
+    showHeard(result[0].transcript);
+    for (let j = 0; j < result.length; j++) {
+      const text = normalizeSpeech(result[j].transcript);
+      const match = text.match(WAKE_WORD);
+      if (!match) continue;
+      if (result.isFinal) {
+        // 「マナ、〇〇して」の〇〇の部分を取り出す
+        const rest = text.slice(match.index + match[0].length).replace(/^[、。,.!！?？\s]+/, "");
+        this.stop();
+        wakeUp(rest);
+        return true;
+      }
+      // 途中経過で「マナ」が聞こえたら、続きの言葉を少しだけ待ってから起きる
+      if (!this.wakeTimer) {
+        this.wakeTimer = setTimeout(() => {
+          this.stop();
+          wakeUp();
+        }, 1200);
+      }
+      return false;
+    }
+    return false;
+  },
+
+  onError(e) {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      this.blocked = true;
+      addNotice("声の聞き取りが許可されなかったよ。ブラウザのマイクの許可を確認してね。");
+    } else if (e.error === "network") {
+      addNotice("声の聞き取りにはネット接続が必要だよ。");
+    } else if (e.error === "audio-capture") {
+      addNotice("マイクから音が取れなかったよ。");
+    }
+    // "no-speech"（何も聞こえなかった）や "aborted"（止めた）は気にしない
+  },
+
+  onEnd() {
+    const mode = this.mode;
+    const pendingWake = Boolean(this.wakeTimer);
+    // 聞き取りが切れても、そこまでの言葉はとっておいて、聞き直した分とつなぐ
+    // （聞き取り途中の言葉もとっておく。切れると確定しないまま終わる端末があるため）
+    if (mode === "talk") {
+      this.saved = this.heardText();
+      this.sessionFinal = this.sessionInterim = "";
+    }
+    this.rec = null;
+    this.mode = null;
+    updateVoiceBtn();
+    if (pendingWake) return; // もうすぐ起きるところ
+    if (mode === "wake" && !awake) {
+      // 寝ているあいだは、聞き取りが切れたらまた聞き直す
+      setTimeout(() => {
+        if (!awake && !this.rec) listenForWakeWord();
+      }, 300);
+    } else if (mode === "talk" && awake) {
+      // 話しかけ待ちの途中で聞き取りが切れても、しばらくは聞き直す
+      if (Date.now() - this.lastActivity < IDLE_LIMIT) {
+        setTimeout(() => {
+          if (awake && !this.rec && !voice.speaking && !sending) this.start("talk");
+        }, 300);
+      } else {
+        addMessage("mana", "（しばらく話しかけられなかったから、また寝るね）");
+        goToSleep();
+      }
+    }
+  },
+};
+
+function showHeard(text) {
+  const el = $("heard");
+  if (el) el.textContent = text ? "聞こえた：" + text : "";
+}
+
+function updateVoiceBtn() {
+  const btn = $("voiceBtn");
+  if (!btn) return;
+  btn.hidden = !ear.supported;
+  btn.classList.toggle("on", ear.mode === "talk");
+}
+
+// 寝ているときは画面の文、起きているときは会話欄にお知らせを出す
+function addNotice(text) {
+  if (awake) addMessage("error", text);
+  else $("sleepText").textContent = text;
+}
+
+// ===== 拍手の検出 =====
+// 仕組み：マイクの音の大きさを細かく測り、
+// 「急に大きくなって、すぐ小さくなる音」を拍手として数える。
+// 0.8秒以内に2回続いたら起動する（話し声やドアの音で起きにくくするため）。
+const clap = {
+  running: false,
+  ctx: null,
+  analyser: null,
+  buffer: null,
+  background: 0.01,   // 周りの雑音のふだんの大きさ
+  peakStart: 0,       // 大きな音が始まった時刻
+  peakMax: 0,         // その音のいちばん大きかったところ
+  prevPeak: 0,        // ひとつ前に測った音の大きさ
+  inPeak: false,
+  lastClapAt: 0,
+  lastClapPeak: 0,
+  cooldownUntil: 0,
+
+  threshold() {
+    // 感度1〜10を、反応する音の大きさに変換（感度が高いほど小さな音でも反応）
+    // 1 → 0.5、5 → 約0.12、10 → 0.02（スマホのマイクは音を小さく拾うので下の方まで用意）
+    return 0.5 * Math.pow(0.04, (settings.sensitivity - 1) / 9);
+  },
+
+  async start() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        // 雑音消しが拍手まで消してしまうので切っておく
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
+    this.ctx = new AudioContext();
+    const source = this.ctx.createMediaStreamSource(stream);
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    source.connect(this.analyser);
+    this.buffer = new Float32Array(this.analyser.fftSize);
+    this.stream = stream;
+    this.running = true;
+    this.timer = setInterval(() => this.tick(), 15);
+  },
+
+  // 声の聞き取りにマイクを譲るため、拍手を聞くのをやめる
+  release() {
+    if (!this.running) return;
+    this.running = false;
+    clearInterval(this.timer);
+    this.stream.getTracks().forEach((t) => t.stop());
+    this.ctx.close().catch(() => {});
+    showLevel(0);
+  },
+
+  // 拍手を聞くのを再開する
+  async resume() {
+    if (this.running) return;
+    try {
+      await this.start();
+    } catch (err) {
+      console.error(err);
+      addNotice("マイクが使えなかったよ。ブラウザの「マイクの使用を許可」を確認してね。");
+    }
+  },
+
+  tick() {
+    this.analyser.getFloatTimeDomainData(this.buffer);
+    let peak = 0;
+    for (const v of this.buffer) peak = Math.max(peak, Math.abs(v));
+
+    showLevel(peak);
+    const now = performance.now();
+    const threshold = this.threshold();
+    const prevPeak = this.prevPeak;
+    this.prevPeak = peak;
+
+    if (!this.inPeak) {
+      // 雑音の大きさをゆっくり覚える
+      this.background = this.background * 0.98 + peak * 0.02;
+      // 拍手は一瞬で大きくなる。話し声は少しずつ大きくなるので、
+      // 「直前の2.5倍以上に跳ね上がった」ときだけ拍手の始まりとみなす
+      if (peak > threshold && peak > this.background * 4 && peak > prevPeak * 2.5) {
+        this.inPeak = true;
+        this.peakStart = now;
+        this.peakMax = peak;
+        this.peakMaxAt = now;
+        this.peakSpan = this.loudSpan(peak);
+      }
+      return;
+    }
+
+    if (peak > this.peakMax) {
+      this.peakMax = peak;
+      this.peakMaxAt = now;
+    }
+    this.peakSpan = Math.max(this.peakSpan, this.loudSpan(this.peakMax));
+    const length = now - this.peakStart;
+    // いちばん大きかったときの3割まで下がったら「音が終わった」とみなす
+    // （スマホは部屋の響きや音の自動調整で余韻が残りやすいので、決まった大きさではなく割合で見る）
+    if (peak < this.peakMax * 0.3) {
+      this.inPeak = false;
+      // 拍手は短い（0.25秒未満）。長い音は話し声や音楽とみなして無視する
+      // マウスのクリック音は一瞬（0.005秒未満）で消えるので無視する。
+      // 長さは録音そのものの中で測る（画面の動きで時計がずれても狂わないように）
+      // 話し声は少しずつ大きくなるので、いちばん大きくなるまで0.035秒より長いものも無視する
+      if (this.peakSpan >= 5 && length < 250 && this.peakMaxAt - this.peakStart <= 35) this.onClap(now, this.peakMax);
+    } else if (length > 400) {
+      this.inPeak = false;
+    }
+  },
+
+  // 録音の中で「大きい音（いちばん大きい音の3割以上）」が続いた長さ（ミリ秒）
+  loudSpan(peakMax) {
+    const limit = peakMax * 0.3;
+    let first = -1, last = -1;
+    for (let i = 0; i < this.buffer.length; i++) {
+      if (Math.abs(this.buffer[i]) > limit) {
+        if (first < 0) first = i;
+        last = i;
+      }
+    }
+    return first < 0 ? 0 : ((last - first) / this.ctx.sampleRate) * 1000;
+  },
+
+  onClap(now, peak) {
+    if (now < this.cooldownUntil) return;
+    flashOrb();
+    const gap = now - this.lastClapAt;
+    const ratio = Math.max(peak, this.lastClapPeak) / Math.max(1e-6, Math.min(peak, this.lastClapPeak));
+    this.lastClapPeak = peak;
+    // マウスの「押す音・離す音」やダブルクリックは間が0.2秒より短いので、それより速い2回は数えない
+    // 拍手2回は同じくらいの大きさ。大きさが2.5倍以上ちがう2つの音は、物音とみなす
+    if (gap > 200 && gap < 800 && ratio < 2.5) {
+      this.lastClapAt = 0;
+      this.cooldownUntil = now + 1500;
+      onDoubleClap();
+    } else {
+      this.lastClapAt = now;
+    }
+  },
+};
+
+function onDoubleClap() {
+  if (!awake) wakeUp();
+}
+
+function showLevel(peak) {
+  // 小さな音も見えるように、平方根で目盛りを広げて表示する
+  $("level").style.width = Math.min(100, Math.sqrt(peak) * 100) + "%";
+}
+
+function showThreshold() {
+  $("thresholdMark").style.left = Math.sqrt(clap.threshold()) * 100 + "%";
+}
+
+function flashOrb() {
+  const orb = $("orb");
+  orb.classList.add("flash");
+  setTimeout(() => orb.classList.remove("flash"), 150);
+}
+
+let micOn = false;
+
+// ===== 画面をつけたままにする =====
+// マナを使い始めたら（ボタンを押したら）、ページを開いている間は画面が消えないようにする
+const screenLock = {
+  wanted: false,
+  lock: null,
+  async keep() {
+    this.wanted = true;
+    if (this.lock || !("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+    try {
+      this.lock = await navigator.wakeLock.request("screen");
+      this.lock.addEventListener("release", () => { this.lock = null; });
+    } catch (err) {
+      console.error(err); // 電池が少ないときなどは断られることがある
+    }
+  },
+};
+// 別のアプリに切り替えると外れるので、戻ってきたらまたかける
+document.addEventListener("visibilitychange", () => {
+  if (screenLock.wanted && document.visibilityState === "visible") screenLock.keep();
+});
+
+// マイクをオンにする。うまくいったら true
+async function turnMicOn() {
+  try {
+    await clap.start();
+    micOn = true;
+    $("micBtn").disabled = true;
+    $("micBtn").textContent = "マイクはオン";
+    $("orb").classList.add("listening");
+    return true;
+  } catch (err) {
+    console.error(err);
+    $("sleepText").innerHTML =
+      "マイクが使えなかったよ。<br>ブラウザの「マイクの使用を許可」を確認してね。";
+    return false;
+  }
+}
+
+$("micBtn").addEventListener("click", async () => {
+  voice.unlock();
+  screenLock.keep();
+  if (await turnMicOn()) listenForWakeWord();
+});
+
+// PCの見張り役（拍手を聞くプログラム）から開かれたときは、ボタンを押さなくてもすぐ起きる
+const openedByWatcher = new URLSearchParams(location.search).has("wake");
+async function wakeFromWatcher() {
+  voice.unlock();
+  await turnMicOn();
+  wakeUp();
+}
+
+$("wakeBtn").addEventListener("click", () => {
+  voice.unlock();
+  screenLock.keep();
+  wakeUp();
+});
+$("sleepBtn").addEventListener("click", goToSleep);
+
+// ===== 会話 =====
+const MAX_HISTORY = 20;  // Claudeに送るのは直近10往復まで（長くなるほど料金が増えるため）
+const MAX_SAVED = 200;   // この端末に残しておく会話の数
+const MAX_TOOL_ROUNDS = 5;
+
+// これまでのやりとり。この端末のブラウザに保存して、ページを閉じても続きから話せるようにする
+// 中身は { role: "user" か "assistant", content: 文 } だけにしておく
+const history = loadList("history");
+// マナが覚えていること（「覚えておいて」と頼むと増える）。{ id, text, at }
+const memories = loadList("memories");
+let sending = false;
+
+function loadList(key) {
+  try {
+    const value = JSON.parse(store.get(key, "[]"));
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory() {
+  if (history.length > MAX_SAVED) history.splice(0, history.length - MAX_SAVED);
+  store.set("history", JSON.stringify(history));
+}
+
+function saveMemories() {
+  store.set("memories", JSON.stringify(memories));
+  renderMemories();
+}
+
+function addMessage(kind, text) {
+  const div = document.createElement("div");
+  div.className = "msg " + kind;
+  div.textContent = text;
+  $("log").appendChild(div);
+  $("log").scrollTop = $("log").scrollHeight;
+  return div;
+}
+
+// 前回の会話を画面に出しておく
+function showSavedHistory() {
+  const recent = history.slice(-30);
+  if (recent.length === 0) return;
+  for (const m of recent) addMessage(m.role === "user" ? "user" : "mana", m.content);
+  addMessage("note", "― ここまで前回の会話 ―");
+}
+
+// Claudeに送る分：直近だけにして、最初が自分（user）の発言になるようにそろえる
+function recentMessages() {
+  let messages = history.slice(-MAX_HISTORY);
+  while (messages.length && messages[0].role !== "user") messages = messages.slice(1);
+  return messages.map((m) => ({ role: m.role, content: m.content }));
+}
+
+// マナの性格＋覚えていること。1回の返事のあいだは変えない（途中で変えるとエラーになるため）
+function systemPrompt() {
+  const now = new Date();
+  let prompt = SYSTEM_PROMPT + `
+- りゅうさんに「覚えておいて」などと頼まれたら remember ツールで保存し、「忘れて」と頼まれたら forget ツールで消します。保存したら、覚えたことを短く伝えます。
+- 言葉の意味や人・物・出来事について調べてと頼まれたら search_wikipedia を使い、結果をもとに短く話します。Wikipediaに載っていない最新ニュースや値段は調べられないので、そう正直に言います。
+- ニュースを聞かれたら get_news を使い、見出しの中から大事そうなものを3つくらい選んで、短く話し言葉で伝えます。どこのニュースかも一言そえます。
+- 天気を聞かれたら get_weather を使います。場所を言われなかったら「${settings.weatherPlace || "金沢市"}」の天気を調べます（聞き返さない）。
+- 「〇分はかって」「〇時に教えて」と頼まれたら set_timer を使い、止めてと言われたら cancel_timer を使います。秒数は今の時刻から計算します。
+- 「明日10時に歯医者」のように予定を言われたら add_event で保存し、消してと言われたら delete_event を使います。数分〜数時間後に一度知らせるだけならタイマー、日時の決まった用事なら予定にします。
+- 予定を聞かれたら、下の「予定」を見て答えます。
+
+# 今の日時
+${now.toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short" })}`;
+  const upcoming = events.filter((e) => e.endOfDay >= now.getTime()).slice(0, 30);
+  prompt += "\n\n# 予定（[ ]の中は番号）\n" +
+    (upcoming.length ? upcoming.map((e) => `[${e.id}] ${describeEvent(e)}`).join("\n") : "（予定はありません）");
+  if (timers.length) {
+    prompt += "\n\n# 動いているタイマー（[ ]の中は番号）\n" +
+      timers.map((t) => `[${t.id}] ${t.label}（${new Date(t.endAt).toLocaleTimeString("ja-JP", { timeStyle: "short" })}に鳴る）`).join("\n");
+  }
+  if (memories.length) {
+    prompt += "\n\n# マナが覚えていること（[ ]の中は番号）\n" +
+      memories.map((m) => `[${m.id}] ${m.text}（${m.at}に覚えた）`).join("\n");
+  }
+  return prompt;
+}
+
+const TOOLS = [
+  {
+    name: "remember",
+    description: "りゅうさんについて覚えておくことを1つ保存する。りゅうさんに覚えておいてと頼まれたときに使う。",
+    input_schema: {
+      type: "object",
+      properties: {
+        fact: { type: "string", description: "覚えること。あとで読んで分かる短い1文。例：りゅうさんはコーヒーよりお茶が好き" },
+      },
+      required: ["fact"],
+      additionalProperties: false,
+    },
+    eager_input_streaming: true,
+  },
+  {
+    name: "forget",
+    description: "覚えていることを1つ消す。番号は「マナが覚えていること」の[ ]の中の番号。",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "消すことの番号" },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    eager_input_streaming: true,
+  },
+  {
+    name: "search_wikipedia",
+    description: "日本語版Wikipedia（ネットの百科事典）で調べる。言葉の意味、人、場所、物、歴史などを調べるときに使う。",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "調べる言葉。例：富士山、織田信長" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_news",
+    description: "最新のニュースの見出しを取ってくる。",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: {
+          type: "string",
+          enum: ["主要", "社会", "政治", "経済", "国際", "スポーツ", "科学・医療", "文化・エンタメ"],
+          description: "ニュースの種類。特に言われなければ「主要」",
+        },
+      },
+      required: ["category"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_weather",
+    description: "場所の今の天気と、今日から3日間の天気予報を調べる。",
+    input_schema: {
+      type: "object",
+      properties: {
+        place: { type: "string", description: "地名。例：東京、大阪市。見つからなかったら英語のローマ字（例：Osaka）でもう一度試す" },
+      },
+      required: ["place"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "set_timer",
+    description: "タイマーをセットする。時間になったら音と声で知らせる。",
+    input_schema: {
+      type: "object",
+      properties: {
+        seconds: { type: "integer", description: "何秒後に鳴らすか（1〜86400）。「7時に」なら今の時刻から計算する" },
+        label: { type: "string", description: "何のタイマーか。短く。例：カップラーメン、出かける時間" },
+      },
+      required: ["seconds", "label"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_event",
+    description: "予定を保存する。時間になったら（または少し前に）音と声で知らせる。",
+    input_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "何の予定か。短く。例：歯医者、母に電話" },
+        date: { type: "string", description: "日付。YYYY-MM-DD の形。例：2026-10-24" },
+        time: { type: "string", description: "時刻。HH:MM の24時間の形。例：10:00。時刻がない終日の予定なら空文字" },
+        remind_minutes_before: { type: "integer", description: "何分前に知らせるか。言われなければ時刻ありは10、終日は0（その日の朝8時に知らせる）" },
+      },
+      required: ["title", "date", "time", "remind_minutes_before"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "delete_event",
+    description: "予定を消す。番号は「予定」の[ ]の中の番号。",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "消す予定の番号" },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "cancel_timer",
+    description: "動いているタイマーを止める。番号は「動いているタイマー」の[ ]の中の番号。",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "integer", description: "止めるタイマーの番号" },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+];
+
+// ===== 調べもの（無料のサービスを使う） =====
+async function getJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("status " + res.status);
+  return res.json();
+}
+
+async function searchWikipedia(query) {
+  const url = "https://ja.wikipedia.org/w/api.php?" + new URLSearchParams({
+    action: "query", format: "json", origin: "*",
+    generator: "search", gsrsearch: query, gsrlimit: "3",
+    prop: "extracts", exintro: "1", explaintext: "1", exlimit: "3",
+  });
+  const data = await getJSON(url);
+  const pages = Object.values(data.query?.pages ?? {}).sort((a, b) => a.index - b.index);
+  if (pages.length === 0) return `「${query}」はWikipediaで見つかりませんでした。`;
+  // 長すぎると料金が増えるので、1つの記事は最初の600文字まで
+  return pages.map((p) => `【${p.title}】\n${(p.extract ?? "").slice(0, 600)}`).join("\n\n");
+}
+
+// ===== ニュース =====
+// ブラウザのページからニュースサイトに直接はつなげないので、無料の中継サービスを通して読む。
+// 中継サービスは他の人が運営しているので、止まっていたら次を試し、全部ダメならWikipediaを読む。
+const NEWS_FEEDS = {
+  "主要": "https://www.nhk.or.jp/rss/news/cat0.xml",
+  "社会": "https://www.nhk.or.jp/rss/news/cat1.xml",
+  "文化・エンタメ": "https://www.nhk.or.jp/rss/news/cat2.xml",
+  "科学・医療": "https://www.nhk.or.jp/rss/news/cat3.xml",
+  "政治": "https://www.nhk.or.jp/rss/news/cat4.xml",
+  "経済": "https://www.nhk.or.jp/rss/news/cat5.xml",
+  "国際": "https://www.nhk.or.jp/rss/news/cat6.xml",
+  "スポーツ": "https://www.nhk.or.jp/rss/news/cat7.xml",
+};
+const NEWS_BACKUP_FEED = { name: "Yahoo!ニュース", url: "https://news.yahoo.co.jp/rss/topics/top-picks.xml" };
+const RELAYS = [
+  (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
+  (url) => "https://api.codetabs.com/v1/proxy/?quest=" + encodeURIComponent(url),
+  (url) => "https://corsproxy.io/?url=" + encodeURIComponent(url),
+];
+
+// 決まった時間で待つのをやめる fetch
+async function fetchText(url, ms = 4000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error("status " + res.status);
+    return await res.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// RSS（見出しの配信）を中継サービス経由で読んで、見出しの一覧にする
+async function readFeed(url) {
+  for (const relay of RELAYS) {
+    try {
+      const xml = new DOMParser().parseFromString(await fetchText(relay(url)), "text/xml");
+      const items = [...xml.querySelectorAll("item")].slice(0, 10).map((item) => ({
+        title: item.querySelector("title")?.textContent.trim() ?? "",
+        date: item.querySelector("pubDate")?.textContent.trim() ?? "",
+      })).filter((x) => x.title);
+      if (items.length) return items;
+    } catch (err) {
+      console.warn("中継サービスがダメだった", err);
+    }
+  }
+  return null;
+}
+
+// 最後の手段：Wikipediaの「最近の出来事」
+async function wikipediaRecentEvents() {
+  const data = await getJSON("https://ja.wikipedia.org/w/api.php?" + new URLSearchParams({
+    action: "parse", page: "Portal:最近の出来事", prop: "text", format: "json", formatversion: "2", origin: "*",
+  }));
+  const doc = new DOMParser().parseFromString(data.parse?.text ?? "", "text/html");
+  return [...doc.querySelectorAll("li")]
+    .map((li) => li.textContent.replace(/\[\d+\]/g, "").trim())
+    .filter((t) => t.length > 15)
+    .slice(0, 10);
+}
+
+async function getNews(category) {
+  const url = NEWS_FEEDS[category] ?? NEWS_FEEDS["主要"];
+  let items = await readFeed(url);
+  let source = "NHKニュース";
+  if (!items) {
+    items = await readFeed(NEWS_BACKUP_FEED.url);
+    source = NEWS_BACKUP_FEED.name;
+  }
+  if (items) {
+    return `出どころ：${source}（${category}）\n` + items.map((x) => `・${x.title}`).join("\n");
+  }
+  const events = await wikipediaRecentEvents();
+  if (!events.length) return null;
+  return "出どころ：Wikipediaの「最近の出来事」（ニュースサイトにつながらなかったので代わり。数日前の出来事もふくむ）\n" +
+    events.map((t) => `・${t.slice(0, 120)}`).join("\n");
+}
+
+// 天気の番号（WMOの決まり）を日本語に
+function weatherName(code) {
+  if (code === 0) return "快晴";
+  if (code <= 2) return "晴れ";
+  if (code === 3) return "くもり";
+  if (code <= 48) return "霧";
+  if (code <= 57) return "霧雨";
+  if (code <= 67) return "雨";
+  if (code <= 77) return "雪";
+  if (code <= 82) return "にわか雨";
+  if (code <= 86) return "にわか雪";
+  return "雷雨";
+}
+
+// 場所の天気を数字のまま取る（見つからなければ null）
+async function fetchWeather(place) {
+  const geo = await getJSON("https://geocoding-api.open-meteo.com/v1/search?" +
+    new URLSearchParams({ name: place, count: "1", language: "ja", format: "json" }));
+  const spot = geo.results?.[0];
+  if (!spot) return null;
+  const w = await getJSON("https://api.open-meteo.com/v1/forecast?" + new URLSearchParams({
+    latitude: spot.latitude, longitude: spot.longitude, timezone: "auto", forecast_days: "3",
+    current: "temperature_2m,weather_code,wind_speed_10m",
+    daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
+  }));
+  const where = [spot.name, spot.admin1, spot.country].filter(Boolean).join("、");
+  return { where, name: spot.name, w };
+}
+
+async function getWeather(place) {
+  const data = await fetchWeather(place);
+  if (!data) return null;
+  const { where, w } = data;
+  const lines = [`場所：${where}`];
+  if (w.current) {
+    lines.push(`今：${weatherName(w.current.weather_code)}、${Math.round(w.current.temperature_2m)}度、風${Math.round(w.current.wind_speed_10m)}km/h`);
+  }
+  const d = w.daily ?? { time: [] };
+  d.time.forEach((day, i) => {
+    lines.push(`${day}：${weatherName(d.weather_code[i])}、最高${Math.round(d.temperature_2m_max[i])}度、最低${Math.round(d.temperature_2m_min[i])}度、降水確率${d.precipitation_probability_max[i] ?? "不明"}%`);
+  });
+  return lines.join("\n");
+}
+
+// ===== 予定 =====
+// { id, title, date: "YYYY-MM-DD", time: "HH:MM" か ""（終日）, startAt, remindAt, endOfDay, notified }
+// 時刻はすべてミリ秒。日付の早い順に並べて保存する
+const events = loadList("events");
+const WEEK = ["日", "月", "火", "水", "木", "金", "土"];
+
+function saveEvents() {
+  events.sort((a, b) => a.startAt - b.startAt);
+  store.set("events", JSON.stringify(events));
+  renderEvents();
+  renderPlans();
+}
+
+function describeEvent(e) {
+  const d = new Date(e.startAt);
+  const day = `${d.getMonth() + 1}月${d.getDate()}日（${WEEK[d.getDay()]}）`;
+  return e.time ? `${day} ${e.time} ${e.title}` : `${day} 終日 ${e.title}`;
+}
+
+// 終わった予定は、次の日になったら消す
+function cleanOldEvents() {
+  const before = events.length;
+  const now = Date.now();
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].endOfDay < now) events.splice(i, 1);
+  }
+  if (events.length !== before) saveEvents();
+}
+
+function renderEvents() {
+  const list = $("eventList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (events.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "予定はまだないよ";
+    list.appendChild(li);
+    return;
+  }
+  for (const e of events) {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = describeEvent(e);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "消す";
+    btn.addEventListener("click", () => {
+      const index = events.findIndex((x) => x.id === e.id);
+      if (index >= 0) events.splice(index, 1);
+      saveEvents();
+    });
+    li.append(span, btn);
+    list.appendChild(li);
+  }
+}
+
+function addEvent(input) {
+  const title = typeof input.title === "string" ? input.title.trim() : "";
+  const date = String(input.date ?? "").trim();
+  const time = String(input.time ?? "").trim();
+  if (!title) return { content: "予定の名前が空でした。", is_error: true };
+  const dm = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const tm = time ? time.match(/^(\d{1,2}):(\d{2})$/) : null;
+  if (!dm || (time && !tm)) return { content: "日付は YYYY-MM-DD、時刻は HH:MM の形にしてください。", is_error: true };
+  const [y, mo, d] = [Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])];
+  // その端末の時刻で日時を作る
+  const start = tm ? new Date(y, mo, d, Number(tm[1]), Number(tm[2])) : new Date(y, mo, d, 0, 0);
+  if (Number.isNaN(start.getTime())) return { content: "日付が正しくありません。", is_error: true };
+  const before = Math.max(0, Math.round(Number(input.remind_minutes_before) || 0));
+  const remindAt = tm ? start.getTime() - before * 60000 : new Date(y, mo, d, 8, 0).getTime();
+  const endOfDay = new Date(y, mo, d, 23, 59, 59).getTime();
+  if (endOfDay < Date.now()) return { content: "その日はもう過ぎています。", is_error: true };
+  const id = events.reduce((max, e) => Math.max(max, e.id), 0) + 1;
+  const event = {
+    id, title, date: `${y}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+    time: tm ? `${tm[1].padStart(2, "0")}:${tm[2]}` : "", startAt: start.getTime(), remindAt, endOfDay,
+    // もう知らせる時刻を過ぎているときは、知らせない
+    notified: remindAt <= Date.now(),
+    before: tm ? before : 0,
+  };
+  events.push(event);
+  saveEvents();
+  addMessage("note", "📅 予定に入れた：" + describeEvent(event));
+  return { content: `番号${id}で保存しました：${describeEvent(event)}` + (event.notified ? "（知らせる時刻はもう過ぎているので知らせません）" : "") };
+}
+
+async function remindEvent(e) {
+  e.notified = true;
+  saveEvents();
+  let text;
+  if (!e.time) text = `りゅうさん、今日は${e.title}の日だよ。`;
+  else if (e.before > 0) text = `りゅうさん、あと${e.before}分で${e.title}だよ。`;
+  else text = `りゅうさん、${e.title}の時間だよ。`;
+  await announce("📅 " + describeEvent(e), text);
+}
+
+// ===== タイマー =====
+// { id, label, endAt（鳴る時刻のミリ秒） }。ページを開き直しても残るように保存する
+const timers = loadList("timers");
+const ringing = new Set();
+let beepCtx = null;
+
+function saveTimers() {
+  store.set("timers", JSON.stringify(timers));
+  renderTimers();
+}
+
+function formatLeft(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+function renderTimers() {
+  const box = $("timers");
+  box.textContent = "";
+  for (const t of timers) {
+    const div = document.createElement("div");
+    div.className = "timer";
+    const text = document.createElement("span");
+    text.dataset.id = t.id;
+    text.textContent = `⏰ ${t.label} ${formatLeft(t.endAt - Date.now())}`;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "止める";
+    btn.addEventListener("click", () => removeTimer(t.id));
+    div.append(text, btn);
+    box.appendChild(div);
+  }
+}
+
+function removeTimer(id) {
+  const index = timers.findIndex((t) => t.id === id);
+  if (index < 0) return null;
+  const [removed] = timers.splice(index, 1);
+  saveTimers();
+  return removed;
+}
+
+// ピピピッと鳴らす（マイクとは別の音の出口を使う）
+function beep() {
+  try {
+    if (!beepCtx) beepCtx = new AudioContext();
+    beepCtx.resume().catch(() => {});
+    const start = beepCtx.currentTime + 0.05;
+    for (let i = 0; i < 6; i++) {
+      const osc = beepCtx.createOscillator();
+      const gain = beepCtx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.value = 0.2;
+      osc.connect(gain).connect(beepCtx.destination);
+      const at = start + Math.floor(i / 3) * 0.8 + (i % 3) * 0.18;
+      osc.start(at);
+      osc.stop(at + 0.12);
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function ringTimer(t) {
+  removeTimer(t.id);
+  await announce("⏰ " + t.label + "の時間", `りゅうさん、${t.label}の時間だよ。`);
+}
+
+// 音と声で知らせる（タイマーと予定で共通）
+let announcing = Promise.resolve();
+function announce(note, text) {
+  // 2つ同時に来たら、順番に知らせる
+  announcing = announcing.then(() => announceNow(note, text));
+  return announcing;
+}
+
+async function announceNow(note, text) {
+  addMessage("note", note);
+  if (!awake) $("sleepText").textContent = note;
+  // 自分の音を拍手や話し声とまちがえないよう、鳴らしているあいだは聞くのをやめる
+  const wasTalking = ear.mode === "talk";
+  ear.stop();
+  if (!awake) clap.release();
+  beep();
+  await new Promise((r) => setTimeout(r, 1600));
+  await voice.speak(text);
+  if (awake) {
+    if (wasTalking) {
+      ear.touch();
+      ear.start("talk");
+    }
+  } else {
+    listenForWakeWord();
+  }
+}
+
+// 1秒ごとに残り時間を更新し、時間が来たものを鳴らす
+// （スマホで画面を消すとブラウザが止まるので、そのときは画面をつけたときに鳴る）
+setInterval(() => {
+  const now = Date.now();
+  for (const t of [...timers]) {
+    if (t.endAt <= now && !ringing.has(t.id)) {
+      ringing.add(t.id);
+      ringTimer(t).finally(() => ringing.delete(t.id));
+    }
+  }
+  for (const e of events) {
+    if (!e.notified && e.remindAt <= now) remindEvent(e);
+  }
+  for (const span of document.querySelectorAll("#timers .timer span")) {
+    const t = timers.find((x) => x.id === Number(span.dataset.id));
+    if (t) span.textContent = `⏰ ${t.label} ${formatLeft(t.endAt - now)}`;
+  }
+}, 1000);
+
+// ツールを実際に動かして、結果の文を返す
+async function runTool(block) {
+  const input = block.input ?? {};
+  if (block.name === "search_wikipedia") {
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    if (!query) return { content: "調べる言葉が空でした。", is_error: true };
+    addMessage("note", "🔎 調べてる：" + query);
+    try {
+      return { content: await searchWikipedia(query) };
+    } catch (err) {
+      console.error(err);
+      return { content: "Wikipediaにつながりませんでした。", is_error: true };
+    }
+  }
+  if (block.name === "get_news") {
+    const category = typeof input.category === "string" ? input.category : "主要";
+    addMessage("note", "📰 ニュースを見てる：" + category);
+    try {
+      const news = await getNews(category);
+      if (!news) return { content: "ニュースを取ってこられませんでした。", is_error: true };
+      return { content: news };
+    } catch (err) {
+      console.error(err);
+      return { content: "ニュースにつながりませんでした。", is_error: true };
+    }
+  }
+  if (block.name === "get_weather") {
+    const place = typeof input.place === "string" ? input.place.trim() : "";
+    if (!place) return { content: "場所が空でした。", is_error: true };
+    addMessage("note", "☁ 天気を見てる：" + place);
+    try {
+      const report = await getWeather(place);
+      if (!report) return { content: `「${place}」という場所が見つかりませんでした。`, is_error: true };
+      if (!settings.weatherPlace) {
+        settings.weatherPlace = place;
+        store.set("weatherPlace", place);
+        refreshWeather();
+      }
+      return { content: report };
+    } catch (err) {
+      console.error(err);
+      return { content: "天気予報につながりませんでした。", is_error: true };
+    }
+  }
+  if (block.name === "set_timer") {
+    const seconds = Math.round(Number(input.seconds));
+    if (!(seconds >= 1 && seconds <= 86400)) return { content: "秒数は1〜86400にしてください。", is_error: true };
+    const label = (typeof input.label === "string" && input.label.trim()) || "タイマー";
+    const id = timers.reduce((max, t) => Math.max(max, t.id), 0) + 1;
+    const endAt = Date.now() + seconds * 1000;
+    timers.push({ id, label, endAt });
+    saveTimers();
+    const at = new Date(endAt).toLocaleTimeString("ja-JP", { timeStyle: "short" });
+    addMessage("note", `⏰ セット：${label}（${at}）`);
+    return { content: `番号${id}でセットしました。${at}に鳴ります。` };
+  }
+  if (block.name === "add_event") return addEvent(input);
+  if (block.name === "delete_event") {
+    const index = events.findIndex((e) => e.id === input.id);
+    if (index < 0) return { content: `番号${input.id}の予定は見つかりませんでした。`, is_error: true };
+    const [removed] = events.splice(index, 1);
+    saveEvents();
+    addMessage("note", "📅 予定を消した：" + describeEvent(removed));
+    return { content: `番号${input.id}を消しました。` };
+  }
+  if (block.name === "cancel_timer") {
+    const removed = removeTimer(input.id);
+    if (!removed) return { content: `番号${input.id}のタイマーは見つかりませんでした。`, is_error: true };
+    addMessage("note", "⏰ 止めた：" + removed.label);
+    return { content: `番号${input.id}を止めました。` };
+  }
+  if (block.name === "remember") {
+    const fact = typeof input.fact === "string" ? input.fact.trim() : "";
+    if (!fact) return { content: "覚える内容が空でした。", is_error: true };
+    const id = memories.reduce((max, m) => Math.max(max, m.id), 0) + 1;
+    memories.push({ id, text: fact, at: new Date().toLocaleDateString("ja-JP") });
+    saveMemories();
+    addMessage("note", "📝 覚えた：" + fact);
+    return { content: `番号${id}で保存しました。` };
+  }
+  if (block.name === "forget") {
+    const index = memories.findIndex((m) => m.id === input.id);
+    if (index < 0) return { content: `番号${input.id}は見つかりませんでした。`, is_error: true };
+    const [removed] = memories.splice(index, 1);
+    saveMemories();
+    addMessage("note", "🗑 忘れた：" + removed.text);
+    return { content: `番号${input.id}を消しました。` };
+  }
+  return { content: "知らないツールです。", is_error: true };
+}
+
+function makeRequest(system, messages) {
+  const request = {
+    model: settings.model,
+    max_tokens: 16000,
+    system,
+    tools: TOOLS,
+    // 会話なので考える量は少なめにして、返事を速くする
+    output_config: { effort: "low" },
+    messages,
+  };
+  // Haikuは考える時間をなくして、さらに安く速くする
+  if (settings.model === "claude-haiku-5-5") request.thinking = { type: "disabled" };
+  // 安全チェックで断られたとき、別のモデルで自動的にやり直してもらう設定
+  if (settings.model !== "claude-haiku-5-5") {
+    request.betas = ["server-side-fallback-2026-07-01"];
+    request.fallbacks = "default";
+  }
+  return request;
+}
+
+function explainError(err) {
+  if (err instanceof Anthropic.AuthenticationError) {
+    return "ClaudeのAPIキーが違うみたい。設定のいちばん上の欄を確認してね（sk-ant- で始まるキーだよ）。";
+  }
+  if (err instanceof Anthropic.PermissionDeniedError) {
+    return "このキーではそのモデルが使えないみたい。設定でモデルを変えてみてね。";
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return "混んでるか、使える量の上限に来たみたい。少し待ってからもう一度送ってね。";
+  }
+  if (err instanceof Anthropic.APIConnectionError) {
+    return "Claudeにつながらなかったよ。ネットの接続を確認してね。";
+  }
+  if (err instanceof Anthropic.APIError) {
+    return `エラーが出たよ（${err.status ?? "不明"}）：${err.message}`;
+  }
+  return "うまく返事できなかったよ：" + (err?.message ?? err);
+}
+
+// 返事の文を返す（うまくいかなかったときは null）
+async function send(text) {
+  if (sending || !text.trim()) return null;
+  if (!settings.apiKey) {
+    addMessage("error", "先に右上の「設定」からAPIキーを入れてね。");
+    return null;
+  }
+  sending = true;
+  $("sendBtn").disabled = true;
+  addMessage("user", text);
+
+  const bubble = addMessage("mana", "…");
+  let reply = "";
+  let result = null;
+  try {
+    const client = new Anthropic({ apiKey: settings.apiKey, dangerouslyAllowBrowser: true });
+    const system = systemPrompt();
+    const messages = [...recentMessages(), { role: "user", content: text }];
+    let refused = false;
+
+    // マナがツール（覚える・忘れる）を使ったら、結果を渡して続きを話してもらう
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const stream = client.beta.messages.stream(makeRequest(system, messages));
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          reply += event.delta.text;
+          bubble.textContent = reply;
+          $("log").scrollTop = $("log").scrollHeight;
+        }
+      }
+      const message = await stream.finalMessage();
+      if (message.stop_reason === "refusal") {
+        refused = true;
+        break;
+      }
+      // この返事の途中のやりとりは、そのまま（考えた跡も含めて）渡す
+      messages.push({ role: "assistant", content: message.content });
+      if (message.stop_reason !== "tool_use") break;
+      const results = [];
+      for (const b of message.content.filter((x) => x.type === "tool_use")) {
+        results.push({ type: "tool_result", tool_use_id: b.id, ...(await runTool(b)) });
+      }
+      messages.push({ role: "user", content: results });
+    }
+
+    if (refused) {
+      bubble.textContent = "ごめん、それには答えられないみたい。";
+      result = bubble.textContent;
+    } else {
+      if (!reply) bubble.textContent = reply = "（返事が空だったよ）";
+      // 保存するのは文だけ（考えた跡やツールのやりとりは残さない）
+      history.push({ role: "user", content: text }, { role: "assistant", content: reply });
+      saveHistory();
+      result = reply;
+    }
+  } catch (err) {
+    console.error(err);
+    bubble.remove();
+    addMessage("error", explainError(err));
+  } finally {
+    sending = false;
+    $("sendBtn").disabled = false;
+  }
+  return result;
+}
+
+// 話しかけられた文を処理する。byVoice：声で話しかけられたかどうか
+async function handleUserText(text, byVoice) {
+  if (SLEEP_WORD.test(text) && text.trim().length <= 15) {
+    addMessage("user", text);
+    addMessage("mana", "おやすみ、りゅうさん。");
+    await voice.speak("おやすみ、りゅうさん。");
+    goToSleep();
+    return;
+  }
+  const reply = await send(text);
+  if (reply) await voice.speak(reply);
+  // 声で話しかけられたときは、返事のあとも続けて聞く
+  if (byVoice && awake && reply) {
+    ear.touch();
+    ear.start("talk");
+  }
+}
+
+// ボタンで直接動かす（アプリのプレビュー画面などでは「フォーム送信」が禁止されていて動かないため）
+function sendFromBox() {
+  screenLock.keep();
+  const text = $("text").value;
+  $("text").value = "";
+  if (!awake) {
+    if (text.trim()) wakeUp(text, false);
+    return;
+  }
+  ear.stop();
+  handleUserText(text, false);
+}
+
+$("voiceBtn").addEventListener("click", () => {
+  voice.unlock();
+  if (ear.mode === "talk") {
+    ear.stop();
+    setState("起きてるよ");
+  } else {
+    voice.stop();
+    ear.touch();
+    ear.start("talk");
+  }
+});
+
+$("input").addEventListener("submit", (e) => e.preventDefault());
+$("sendBtn").addEventListener("click", sendFromBox);
+
+$("text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    sendFromBox();
+  }
+});
+
+// ===== 設定画面 =====
+function openSettings() {
+  $("apiKey").value = settings.apiKey;
+  $("model").value = settings.model;
+  $("sensitivity").value = settings.sensitivity;
+  $("sensitivityValue").textContent = settings.sensitivity;
+  $("wakeMode").value = settings.wakeMode;
+  $("speak").checked = settings.speak;
+  $("rate").value = settings.rate;
+  $("useEleven").checked = settings.useEleven;
+  $("elevenKey").value = settings.elevenKey;
+  $("voiceId").value = settings.voiceId;
+  $("elevenModel").value = settings.elevenModel;
+  $("weatherPlace").value = settings.weatherPlace;
+  $("rateValue").textContent = settings.rate;
+  fillVoices();
+  renderMemories();
+  resetClearButton();
+  $("settings").showModal();
+}
+
+function renderMemories() {
+  const list = $("memoryList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (memories.length === 0) {
+    const li = document.createElement("li");
+    li.textContent = "まだ何も覚えてないよ";
+    list.appendChild(li);
+    return;
+  }
+  for (const m of memories) {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = m.text;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "忘れる";
+    btn.addEventListener("click", () => {
+      const index = memories.findIndex((x) => x.id === m.id);
+      if (index >= 0) memories.splice(index, 1);
+      saveMemories();
+    });
+    li.append(span, btn);
+    list.appendChild(li);
+  }
+}
+
+// 履歴を消すボタンは、2回押したときだけ消す（間違って押しても大丈夫なように）
+function resetClearButton() {
+  const btn = $("clearHistoryBtn");
+  btn.textContent = "会話の履歴を消す";
+  btn.dataset.armed = "";
+}
+
+$("clearHistoryBtn").addEventListener("click", () => {
+  const btn = $("clearHistoryBtn");
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = "1";
+    btn.textContent = "本当に消す？（もう一度押すと消える）";
+    return;
+  }
+  history.length = 0;
+  saveHistory();
+  $("log").innerHTML = "";
+  btn.textContent = "消したよ";
+  btn.dataset.armed = "";
+});
+
+function fillVoices() {
+  const select = $("voiceSelect");
+  select.innerHTML = '<option value="">おまかせ</option>';
+  for (const v of voice.japaneseVoices()) {
+    const option = document.createElement("option");
+    option.value = v.voiceURI;
+    option.textContent = v.name;
+    select.appendChild(option);
+  }
+  select.value = settings.voiceURI;
+  if (select.value !== settings.voiceURI) select.value = "";
+}
+
+// 声の一覧はあとから読み込まれることがある
+if (voice.available()) speechSynthesis.addEventListener("voiceschanged", () => {
+  if ($("settings").open) fillVoices();
+});
+
+$("rate").addEventListener("input", (e) => {
+  $("rateValue").textContent = e.target.value;
+});
+
+$("settingsBtn").addEventListener("click", openSettings);
+$("sensitivity").addEventListener("input", (e) => {
+  $("sensitivityValue").textContent = e.target.value;
+});
+
+$("closeBtn").addEventListener("click", () => $("settings").close());
+// キー入力中にEnterを押したら保存と同じ扱いにする
+$("settingsForm").addEventListener("submit", (e) => {
+  e.preventDefault();
+  $("saveBtn").click();
+});
+$("saveBtn").addEventListener("click", () => {
+  settings.apiKey = $("apiKey").value.trim();
+  // 2つのキーの入れ間違いに気づけるように、形が違ったら知らせる
+  if (settings.apiKey && !settings.apiKey.startsWith("sk-ant-")) {
+    addNotice("Claudeの欄に入れたキーが sk-ant- で始まってないよ。ElevenLabsのキーと入れ間違えてないか確認してね。");
+  }
+  settings.model = $("model").value;
+  settings.sensitivity = Number($("sensitivity").value);
+  settings.wakeMode = $("wakeMode").value;
+  settings.speak = $("speak").checked;
+  settings.voiceURI = $("voiceSelect").value;
+  settings.rate = Number($("rate").value);
+  settings.useEleven = $("useEleven").checked;
+  settings.elevenKey = $("elevenKey").value.trim();
+  settings.voiceId = $("voiceId").value.trim();
+  settings.elevenModel = $("elevenModel").value;
+  const place = $("weatherPlace").value.trim();
+  if (place !== settings.weatherPlace) {
+    settings.weatherPlace = place;
+    store.set("weatherPlace", place);
+    refreshWeather();
+  }
+  voice.elevenFailed = false; // 設定を変えたらもう一度ElevenLabsを試す
+  store.set("apiKey", settings.apiKey);
+  store.set("model", settings.model);
+  store.set("sensitivity", String(settings.sensitivity));
+  store.set("wakeMode", settings.wakeMode);
+  store.set("speak", settings.speak ? "1" : "0");
+  store.set("voiceURI", settings.voiceURI);
+  store.set("rate", String(settings.rate));
+  store.set("useEleven", settings.useEleven ? "1" : "0");
+  store.set("elevenKey", settings.elevenKey);
+  store.set("voiceId", settings.voiceId);
+  store.set("elevenModel", settings.elevenModel);
+  showThreshold();
+  $("settings").close();
+  // 合言葉の設定を変えたら、待ち受けをやり直す
+  if (!awake) {
+    ear.stop();
+    listenForWakeWord();
+  }
+  if (!settings.speak) voice.stop();
+});
+
+// ===== HUD（まわりの表示） =====
+// ===== 背景の電子回路（前に作ったJARVISと同じ描き方。毎回同じ模様になるよう、決まった数から乱数を作る） =====
+function drawCircuit() {
+  // 画面の大きさに合わせて描く（狭い画面は縦長の400×800を基準に、広い画面は広げて部品を増やす）
+  const VW = Math.max(400, Math.round(innerWidth));
+  const VH = Math.max(800 * (VW / 400) * (innerHeight / innerWidth) | 0, 400);
+  const k = (VW * VH) / (400 * 800);
+  let seed = 20261016;
+  const R = () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  const ri = (a, b) => a + R() * (b - a), pk = (a) => a[Math.floor(R() * a.length)], f = (n) => n.toFixed(1);
+  let o = "";
+  const bx = [], T = [];
+  const free = (x, y, w, h, m) => bx.every((b) => x > b[2] + m || x + w < b[0] - m || y > b[3] + m || y + h < b[1] - m);
+  const via = (x, y) => `<circle cx="${f(x)}" cy="${f(y)}" r="1.7"/><circle cx="${f(x)}" cy="${f(y)}" r=".6" fill="#37d6ff" stroke="none"/>`;
+  function trace(x, y, dx, dy) {
+    const n = ri(4, 30), m = ri(0, 22), kk = ri(3, 26), sg = pk([-1, 1]), px = Math.abs(dy) * sg, py = Math.abs(dx) * sg;
+    const x1 = x + dx * n, y1 = y + dy * n, x2 = x1 + (dx + px) * m, y2 = y1 + (dy + py) * m, x3 = x2 + dx * kk, y3 = y2 + dy * kk;
+    const d = `M${f(x)} ${f(y)}L${f(x1)} ${f(y1)}L${f(x2)} ${f(y2)}L${f(x3)} ${f(y3)}`;
+    if (n + m * 1.4 + kk > 45) T.push(d);
+    return `<path d="${d}"/>` + (R() < 0.65 ? via(x3, y3) : "");
+  }
+  function chip(x, y, w, h, kind) {
+    let g = `<rect x="${f(x)}" y="${f(y)}" width="${f(w)}" height="${f(h)}" fill="#031522" stroke-opacity=".9"/><circle cx="${f(x + 3)}" cy="${f(y + 3)}" r="1" fill="#37d6ff" stroke="none"/>`;
+    const sides = kind === "soic" ? [[-1, 0], [1, 0]] : [[-1, 0], [1, 0], [0, -1], [0, 1]], pn = Math.floor(ri(4, 14)), bg = kind === "bga";
+    if (bg) for (let i = 5; i < w - 3; i += 3.5) for (let j = 5; j < h - 3; j += 3.5) g += `<circle cx="${f(x + i)}" cy="${f(y + j)}" r=".6" fill="#37d6ff" fill-opacity=".55" stroke="none"/>`;
+    for (const [dx, dy] of sides) {
+      const hz = dx !== 0, len = hz ? h : w, n = Math.min(pn, Math.floor(len / 3.3)), st = len / (n + 1);
+      for (let i = 1; i <= n; i++) {
+        const p = i * st, qx = hz ? (dx < 0 ? x : x + w) : x + p, qy = hz ? y + p : (dy < 0 ? y : y + h);
+        if (!bg) g += `<rect x="${f(hz ? (dx < 0 ? x - 3 : x + w) : qx - 0.6)}" y="${f(hz ? qy - 0.6 : (dy < 0 ? y - 3 : y + h))}" width="${hz ? 3 : 1.2}" height="${hz ? 1.2 : 3}"/>`;
+        if (R() < 0.75) g += trace(qx + (bg ? 0 : dx * 3), qy + (bg ? 0 : dy * 3), dx, dy);
+      }
+    }
+    return g;
+  }
+  // 部品（チップ）
+  for (let t = 0; t < 400 * k && bx.length < 30 * k; t++) {
+    const kind = pk(["qfp", "soic", "bga", "qfp", "soic"]);
+    let w = ri(18, 34), h = w;
+    if (kind === "soic") { w = ri(12, 18); h = ri(20, 40); }
+    if (kind === "bga") { w = h = ri(16, 26); }
+    const x = ri(18, VW - 18 - w), y = ri(14, VH - 14 - h);
+    if (!free(x, y, w, h, 20)) continue;
+    bx.push([x, y, x + w, y + h]);
+    o += chip(x, y, w, h, kind);
+  }
+  // 束になった配線
+  for (let b = 0; b < 14 * Math.sqrt(k); b++) {
+    const hz = R() < 0.5, c = Math.floor(ri(3, 10)), p0 = ri(10, (hz ? VH / 2 : VW) - 20), a = ri(40, (hz ? VW : VH / 2) - 100), j = ri(-30, 30);
+    for (let i = 0; i < c; i++) {
+      const q = p0 + i * 3;
+      const d = hz ? `M0 ${f(q * 2)}H${f(a)}L${f(a + Math.abs(j))} ${f(q * 2 + j)}H${VW}` : `M${f(q)} 0V${f(a * 2)}L${f(q + j)} ${f(a * 2 + Math.abs(j))}V${VH}`;
+      o += `<path d="${d}"/>`;
+      if (i % 3 === 0) T.push(d);
+    }
+  }
+  // 小さな部品
+  for (let n = 0, t = 0; n < 40 * k && t < 300 * k; t++) {
+    const x = ri(8, VW - 14), y = ri(8, VH - 14), v = R() < 0.5, w = v ? 3.5 : 7, h = v ? 7 : 3.5;
+    if (!free(x, y, w + 3, h + 3, 5)) continue;
+    bx.push([x, y, x + w, y + h]);
+    n++;
+    const cp = `fill="#37d6ff" fill-opacity=".6"`;
+    o += `<rect x="${f(x)}" y="${f(y)}" width="${w}" height="${h}"/>` + (v
+      ? `<rect x="${f(x)}" y="${f(y - 1.5)}" width="3.5" height="1.5" ${cp}/><rect x="${f(x)}" y="${f(y + h)}" width="3.5" height="1.5" ${cp}/>`
+      : `<rect x="${f(x - 1.5)}" y="${f(y)}" width="1.5" height="3.5" ${cp}/><rect x="${f(x + w)}" y="${f(y)}" width="1.5" height="3.5" ${cp}/>`);
+  }
+  // 端子の列
+  for (let r = 0; r < 3 * Math.sqrt(k); r++) {
+    const hz = R() < 0.5, x = ri(20, VW - 150), y = ri(30, VH - 60), c = Math.floor(ri(8, 16));
+    for (let i = 0; i < c; i++) {
+      const px = hz ? x + i * 6 : x, py = hz ? y : y + i * 6;
+      o += `<rect x="${f(px)}" y="${f(py)}" width="3.5" height="3.5"/><circle cx="${f(px + 1.75)}" cy="${f(py + 1.75)}" r=".6" fill="#37d6ff" stroke="none"/>`;
+    }
+  }
+  for (let i = 0; i < 60 * k; i++) o += via(ri(6, VW - 6), ri(6, VH - 6));
+  const svg = $("pcb");
+  svg.setAttribute("viewBox", `0 0 ${VW} ${VH}`);
+  svg.setAttribute("preserveAspectRatio", "xMidYMid slice");
+  $("pcbBg").innerHTML = `<g fill="none" stroke="#37d6ff" stroke-opacity=".5" stroke-width=".7">${o}</g>`;
+  // 線の上を流れる光（青・赤・緑）
+  const cols = ["", "fr", "fg"];
+  let fx = "";
+  T.sort(() => R() - 0.5).slice(0, Math.round(22 * Math.sqrt(k))).forEach((d, i) => {
+    fx += `<path class="fl ${cols[i % 3]}" pathLength="400" style="animation-delay:-${f(R() * 2.4)}s" d="${d}"/>`;
+  });
+  $("pcbFx").innerHTML = fx;
+}
+try { drawCircuit(); } catch (err) { console.error(err); }
+
+// ===== まんなかの光る輪（前に作ったJARVISの輪を、マナの状態で動かす） =====
+const reactor = {
+  canvas: $("reactor"),
+  mini: $("miniRing"),
+  angles: [0, 0, 0, 0, 0, 0, 0, 0],
+  target: 0, // 動きの強さの目標（話しているときは揺れる）
+  env: 0,    // 今の動きの強さ
+  last: performance.now(),
+
+  draw() {
+    const hh = this.canvas.getContext("2d");
+    const now = performance.now(), dt = Math.min(0.05, (now - this.last) / 1000);
+    this.last = now;
+    const t = now / 1000, W = this.canvas.width, C = W / 2, R = W / 2 * 0.97, sc = W / 600, D = Math.PI / 180;
+    const mode = document.body.dataset.mode;
+    if (mode === "speak") { if (Math.random() < 0.1) this.target = 0.3 + Math.random() * 0.7; }
+    else this.target = mode === "think" ? 0.6 : mode === "listen" ? 0.3 : 0;
+    this.env += (this.target - this.env) * 0.15;
+    const env = this.env;
+    // 寝ているときはゆっくり、考え中は速く回す
+    const sp = (mode === "sleep" ? 0.5 : 1) + env * 3;
+    this.angles = this.angles.map((v, i) => v + dt * (i + 1) * sp * 1.5);
+    const HA = this.angles;
+    hh.clearRect(0, 0, W, W);
+    hh.globalAlpha = 1;
+    const lg = hh.createLinearGradient(C - R, 0, C + R, 0);
+    lg.addColorStop(0, "#2fd0ff"); lg.addColorStop(0.45, "#8fe6ff"); lg.addColorStop(0.6, "#ffc27a"); lg.addColorStop(1, "#ff7a1a");
+    const A = (r, a0, a1, w, col, al, dash, bl, sh) => { hh.save(); hh.globalAlpha = al; hh.strokeStyle = col; hh.lineWidth = w * R; hh.setLineDash((dash || []).map((v) => v * sc)); hh.shadowColor = sh || "#37b8ff"; hh.shadowBlur = (bl || 0) * sc; hh.beginPath(); hh.arc(C, C, r * R, a0 * D, a1 * D); hh.stroke(); hh.restore(); };
+    const B = (x, y, r, col, al) => { const g = hh.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(${col},${al})`); g.addColorStop(0.35, `rgba(${col},${al * 0.35})`); g.addColorStop(1, `rgba(${col},0)`); hh.fillStyle = g; hh.fillRect(x - r, y - r, r * 2, r * 2); };
+    const P = (r, a) => [C + Math.cos(a * D) * r * R, C + Math.sin(a * D) * r * R];
+    B(C - R * 0.35, C, R * 0.9, "40,150,255", 0.16); B(C + R * 0.4, C, R * 0.8, "255,110,30", 0.15);
+    [[0.62, 0, 0.5], [0.7, 1, 0.45], [0.78, 2, 0.5], [0.86, 3, 0.4], [0.95, 4, 0.45]].forEach(([r, i, al], kk) => { const o = HA[i] * (kk % 2 ? -1 : 1) * 0.3; A(r, o, o + 360, 0.0025, lg, al + 0.15, [300 + kk * 60, 50 + kk * 20, 120, 40 + kk * 10], 0); });
+    [[-20, 0.55, 0.98, 0], [10, 0.5, 0.92, 0], [35, 0.6, 1, 0], [60, 0.55, 0.9, 0], [120, 0.5, 0.85, 1], [200, 0.55, 0.9, 1], [-60, 0.6, 0.95, 0], [160, 0.6, 0.97, 1]].forEach(([a, r0, r1, b]) => { const [x0, y0] = P(r0, a), [x1, y1] = P(r1, a); hh.save(); hh.globalAlpha = 0.6; hh.strokeStyle = b ? "#8fe6ff" : "#ff9a40"; hh.lineWidth = 1.2 * sc; hh.beginPath(); hh.moveTo(x0, y0); hh.lineTo(x1, y1); hh.stroke(); hh.restore(); B(x1, y1, R * 0.035, b ? "140,230,255" : "255,140,40", 0.9); });
+    const dr = HA[7] * 5, bo = -HA[6] * 4;
+    A(0.8, 20 + dr, 75 + dr, 0.035, "#ff8a1e", 0.9, [3, 3], 10, "#ff7a00"); A(0.72, 100 + bo, 135 + bo, 0.025, "#8fe6ff", 0.7, [2, 3], 6);
+    hh.save(); hh.strokeStyle = "#ffd9a0"; hh.lineWidth = 1.4 * sc;
+    for (let kk = 0; kk < 12; kk++) { const x = C + R * (0.52 + ((kk * 37) % 10) / 100), y = C + R * (-0.5 + kk * 0.045), l = R * (0.07 + ((kk * 53) % 17) / 100); if (Math.hypot(x + l - C, y - C) > R * 0.98) continue; hh.globalAlpha = 0.35 + 0.25 * ((kk * 7) % 3) / 2; hh.beginPath(); hh.moveTo(x, y); hh.lineTo(x + l, y); hh.stroke(); }
+    for (let kk = 0; kk < 14; kk++) { const x = C - R * 0.42 + kk * 3.2 * sc, y = C + R * 0.62; hh.globalAlpha = 0.55; hh.beginPath(); hh.moveTo(x, y); hh.lineTo(x, y + (kk % 3 + 1) * 3 * sc); hh.stroke(); }
+    hh.restore();
+    [[-0.2, 0.86], [0.18, 0.8]].forEach(([dx, dy]) => { hh.save(); hh.strokeStyle = "#ff8a1e"; hh.globalAlpha = 0.8; hh.lineWidth = 1.5 * sc; hh.shadowColor = "#ff7a00"; hh.shadowBlur = 8 * sc; hh.beginPath(); hh.arc(C + dx * R, C + dy * R, R * 0.035, 0, 6.2832); hh.stroke(); hh.restore(); });
+    [0.30, 0.33, 0.36, 0.40, 0.44].forEach((r, kk) => { const o = HA[kk] * (kk % 2 ? -0.6 : 0.6); A(r, o, o + 360, 0.003, lg, 0.6, kk % 2 ? [] : [10 + kk * 4, 5], 0); });
+    hh.save(); hh.strokeStyle = lg;
+    for (let i = 0; i < 60; i++) { const a = i * 6 + HA[5] * 0.5, L = i % 5 === 0 ? 0.05 : 0.025, [x0, y0] = P(0.40, a), [x1, y1] = P(0.40 + L, a); hh.globalAlpha = 0.55; hh.lineWidth = (i % 5 === 0 ? 2 : 1) * sc; hh.beginPath(); hh.moveTo(x0, y0); hh.lineTo(x1, y1); hh.stroke(); }
+    hh.restore();
+    A(0.5, -95 + dr, 55 + dr, 0.045, "#ff9b2e", Math.min(1, 0.9 + env * 0.1), [], 20 + env * 20, "#ff7a00"); A(0.5, -95 + dr, 55 + dr, 0.01, "#fff1d0", 0.95); A(0.5, 55 + dr, 265 + dr, 0.02, "#ffb4a0", 0.85, [6, 4], 8, "#ff8a60");
+    A(0.57, 95 + bo, 215 + bo, 0.022, "#8fe6ff", 0.9, [], 14); A(0.6, 215 + bo, 300 + bo, 0.012, "#35c8ff", 0.8, [], 8); A(0.54, 190 + bo, 330 + bo, 0.004, "#8fe6ff", 0.7);
+    A(0.215, 0, 360, 0.07, "rgba(20,110,200,.55)", 1, [], 24 + env * 20); A(0.215, 0, 360, 0.035, "#35c8ff", 0.95, [], 16 + env * 14); A(0.2, 0, 360, 0.009, "#eaffff", 0.95); A(0.255, 0, 360, 0.02, "#010a12", 0.75);
+    hh.save(); hh.fillStyle = "rgba(3,12,24,.93)"; hh.beginPath(); hh.arc(C, C, R * 0.185, 0, 6.2832); hh.fill(); hh.restore();
+    [[0.17, [], 0.7], [0.15, [3, 4], 0.8], [0.12, [8, 5], 0.8], [0.09, [2, 3], 0.8], [0.06, [], 0.7], [0.035, [], 0.8]].forEach(([r, d, al], kk) => { const o = HA[kk] * (kk % 2 ? -3 : 3); A(r, o, o + 360, 0.003, "#5fdcff", al, d, 4); });
+    hh.save(); hh.strokeStyle = "#5fdcff"; hh.lineWidth = 1.2 * sc; hh.globalAlpha = 0.55;
+    for (let i = 0; i < 4; i++) { const [x0, y0] = P(0.03, i * 90), [x1, y1] = P(0.17, i * 90); hh.beginPath(); hh.moveTo(x0, y0); hh.lineTo(x1, y1); hh.stroke(); }
+    hh.globalAlpha = 0.95; hh.lineWidth = 1.8 * sc;
+    for (const [a, l] of [[-130 + Math.sin(t * 0.5) * 8, 0.15], [-50 + Math.cos(t * 0.4) * 8, 0.12]]) { const [x1, y1] = P(l, a); hh.beginPath(); hh.moveTo(C, C); hh.lineTo(x1, y1); hh.stroke(); }
+    hh.restore();
+    A(0.16, -150, -120, 0.014, "#ff8a1e", 0.95, [], 6, "#ff7a00"); B(C, C, R * 0.05, "225,252,255", 0.9);
+    const pl = 1 + 0.12 * Math.sin(t * 2) + env * 0.6, f1 = P(0.47, 95), f2 = P(0.43, -140), f3 = P(0.5, -8);
+    B(f1[0], f1[1], R * 0.17 * pl, "200,235,255", 0.95);
+    hh.save(); hh.globalAlpha = 0.7; hh.strokeStyle = "#eaffff"; hh.lineWidth = 2 * sc; hh.shadowColor = "#8fe6ff"; hh.shadowBlur = 10 * sc; hh.beginPath(); hh.moveTo(f1[0] - R * 0.14, f1[1]); hh.lineTo(f1[0] + R * 0.14, f1[1]); hh.stroke(); hh.restore();
+    B(f2[0], f2[1], R * 0.11 * pl, "200,235,255", 0.9); B(f3[0], f3[1], R * 0.05 * pl, "255,255,255", 0.95);
+    hh.save(); hh.strokeStyle = "#fff"; hh.lineWidth = 1.5 * sc; hh.beginPath(); hh.arc(f3[0], f3[1], R * 0.018, 0, 6.2832); hh.stroke(); hh.restore();
+    [[40, 0.82], [-25, 0.62], [130, 0.92]].forEach(([a, r]) => { const q = P(r, a); B(q[0], q[1], R * 0.05, "255,120,30", 0.7); });
+    // 上の小さい輪は、大きい輪を縮めて写す
+    const m = this.mini.getContext("2d");
+    m.clearRect(0, 0, this.mini.width, this.mini.height);
+    m.drawImage(this.canvas, 0, 0, this.mini.width, this.mini.height);
+  },
+
+  loop() {
+    try { this.draw(); } catch (err) { console.error(err); return; }
+    requestAnimationFrame(() => this.loop());
+  },
+};
+reactor.loop();
+
+const MODE_LABELS = { sleep: "STANDBY", awake: "ONLINE", listen: "LISTENING", think: "THINKING", speak: "SPEAKING" };
+
+// 今の状態を body に書いて、輪の動きを変える
+function updateMode() {
+  let mode = "sleep";
+  if (voice.speaking) mode = "speak";
+  else if (sending) mode = "think";
+  else if (ear.mode === "talk") mode = "listen";
+  else if (awake) mode = "awake";
+  if (document.body.dataset.mode !== mode) {
+    document.body.dataset.mode = mode;
+    $("modeLabel").textContent = MODE_LABELS[mode];
+  }
+}
+
+const WEEK_EN = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+function updateClock() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  $("clock").textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  $("date").textContent = `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${WEEK_EN[now.getDay()]}（${WEEK[now.getDay()]}）`;
+}
+
+// 今日と、これからの予定を4つまで
+function renderPlans() {
+  const list = $("planList");
+  list.innerHTML = "";
+  const now = Date.now();
+  const today = new Date().toDateString();
+  const upcoming = events.filter((e) => e.endOfDay >= now).slice(0, 4);
+  if (upcoming.length === 0) {
+    const li = document.createElement("li");
+    li.className = "sub";
+    li.textContent = "予定なし";
+    list.appendChild(li);
+    return;
+  }
+  for (const e of upcoming) {
+    const d = new Date(e.startAt);
+    const li = document.createElement("li");
+    const when = document.createElement("span");
+    when.className = "when";
+    const day = d.toDateString() === today ? "今日" : `${d.getMonth() + 1}/${d.getDate()}`;
+    when.textContent = e.time ? `${day} ${e.time}` : `${day} 終日`;
+    li.append(when, document.createTextNode(e.title));
+    list.appendChild(li);
+  }
+}
+
+async function refreshWeather() {
+  const place = settings.weatherPlace;
+  if (!place) {
+    $("weatherNow").textContent = "―";
+    $("weatherDays").textContent = "設定で場所を入れると、ここに天気が出るよ";
+    return;
+  }
+  try {
+    const data = await fetchWeather(place);
+    if (!data) {
+      $("weatherNow").textContent = "―";
+      $("weatherDays").textContent = `「${place}」が見つからなかったよ`;
+      return;
+    }
+    const { name, w } = data;
+    const c = w.current;
+    $("weatherNow").textContent = c ? `${weatherName(c.weather_code)} ${Math.round(c.temperature_2m)}°` : "―";
+    const d = w.daily;
+    $("weatherDays").textContent = d
+      ? `${name}　最高${Math.round(d.temperature_2m_max[0])}° 最低${Math.round(d.temperature_2m_min[0])}° 雨${d.precipitation_probability_max[0] ?? "-"}%`
+      : name;
+  } catch (err) {
+    console.error(err);
+    $("weatherDays").textContent = "天気につながらなかったよ";
+  }
+}
+
+updateClock();
+setInterval(() => {
+  updateClock();
+  updateMode();
+}, 250);
+setInterval(renderPlans, 60000); // 日付が変わったときなどのため
+setInterval(refreshWeather, 30 * 60000); // 天気は30分ごとに取り直す
+
+showThreshold();
+updateVoiceBtn();
+showSavedHistory();
+renderPlans();
+refreshWeather();
+renderTimers();
+cleanOldEvents();
+renderEvents();
+if (!settings.apiKey) openSettings();
+else if (openedByWatcher) wakeFromWatcher();
+</script>
+</body>
+</html>
