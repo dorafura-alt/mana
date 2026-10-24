@@ -1,0 +1,71 @@
+# マナのニュース係：1時間ごとにNHKなどの見出しを取ってきて news.json に書く
+name: news
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  news:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 見出しを取ってくる
+        shell: python
+        run: |
+          import json, urllib.request, xml.etree.ElementTree as ET
+          from datetime import datetime, timezone, timedelta
+
+          FEEDS = {
+              "主要": "https://www.nhk.or.jp/rss/news/cat0.xml",
+              "社会": "https://www.nhk.or.jp/rss/news/cat1.xml",
+              "文化・エンタメ": "https://www.nhk.or.jp/rss/news/cat2.xml",
+              "科学・医療": "https://www.nhk.or.jp/rss/news/cat3.xml",
+              "政治": "https://www.nhk.or.jp/rss/news/cat4.xml",
+              "経済": "https://www.nhk.or.jp/rss/news/cat5.xml",
+              "国際": "https://www.nhk.or.jp/rss/news/cat6.xml",
+              "スポーツ": "https://www.nhk.or.jp/rss/news/cat7.xml",
+          }
+          BACKUP = ("Yahoo!ニュース", "https://news.yahoo.co.jp/rss/topics/top-picks.xml")
+
+          def read(url):
+              req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mana news bot)"})
+              with urllib.request.urlopen(req, timeout=20) as res:
+                  root = ET.fromstring(res.read())
+              items = []
+              for item in root.iter("item"):
+                  title = (item.findtext("title") or "").strip()
+                  if title:
+                      items.append({"title": title, "date": (item.findtext("pubDate") or "").strip()})
+              return items[:10]
+
+          categories = {}
+          for name, url in FEEDS.items():
+              try:
+                  items = read(url)
+                  if items:
+                      categories[name] = {"source": "NHKニュース", "items": items}
+              except Exception as err:
+                  print(name, "がダメだった:", err)
+          if "主要" not in categories:
+              try:
+                  categories["主要"] = {"source": BACKUP[0], "items": read(BACKUP[1])}
+              except Exception as err:
+                  print("予備もダメだった:", err)
+
+          if not categories:
+              raise SystemExit("どこからも取れなかった")
+          now = datetime.now(timezone(timedelta(hours=9)))
+          with open("news.json", "w", encoding="utf-8") as f:
+              json.dump({"updated": now.isoformat(timespec="minutes"), "categories": categories}, f, ensure_ascii=False, indent=1)
+          print("取れた:", ", ".join(categories))
+      - name: 保存する
+        run: |
+          git config user.name "mana-news"
+          git config user.email "mana-news@users.noreply.github.com"
+          git add news.json
+          git diff --cached --quiet || (git commit -m "ニュースを更新" && git push)
