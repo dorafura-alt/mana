@@ -870,7 +870,7 @@ const ear = {
   onError(e) {
     if (e.error === "not-allowed" || e.error === "service-not-allowed") {
       this.blocked = true;
-      addNotice("声の聞き取りが許可されなかったよ。ブラウザのマイクの許可を確認してね。");
+      addNotice("声の聞き取りが許可されなかったよ。Chromeのマイクの許可を確認してから、もう一度🎤を押してね（ダメならマナを閉じて開き直す）。");
     } else if (e.error === "network") {
       addNotice("声の聞き取りにはネット接続が必要だよ。");
     } else if (e.error === "audio-capture") {
@@ -1439,7 +1439,38 @@ async function wikipediaRecentEvents() {
     .slice(0, 10);
 }
 
+// GitHubのニュース係（1時間ごとに news.json を作る）の見出し。置き場所はGitHubの中の元ファイルと、このページの横の2か所を見る
+function newsJsonUrls() {
+  const urls = [];
+  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
+  const repo = location.pathname.split("/").filter(Boolean)[0];
+  if (m && repo) urls.push(`https://raw.githubusercontent.com/${m[1]}/${repo}/main/news.json?t=${Date.now()}`);
+  urls.push(new URL("news.json", location.href).href + "?t=" + Date.now());
+  return urls;
+}
+
+async function newsFromGithub(category) {
+  let best = null;
+  for (const url of newsJsonUrls()) {
+    try {
+      const data = JSON.parse(await fetchText(url, 5000));
+      if (data.categories && (!best || data.updated > best.updated)) best = data;
+    } catch (err) {
+      console.warn("news.json が読めなかった", err);
+    }
+  }
+  if (!best) return null;
+  const hit = best.categories[category] ?? best.categories["主要"];
+  if (!hit || !hit.items?.length) return null;
+  const when = new Date(best.updated);
+  const ago = Math.round((Date.now() - when.getTime()) / 60000);
+  const age = Number.isNaN(ago) ? "" : ago < 90 ? `${ago}分前に集めた見出し` : `${Math.round(ago / 60)}時間前に集めた見出し`;
+  return `出どころ：${hit.source}（${best.categories[category] ? category : "主要"}、${age}）\n` + hit.items.map((x) => `・${x.title}`).join("\n");
+}
+
 async function getNews(category) {
+  const fromGithub = await newsFromGithub(category);
+  if (fromGithub) return fromGithub;
   const url = NEWS_FEEDS[category] ?? NEWS_FEEDS["主要"];
   let items = await readFeed(url);
   let source = "NHKニュース";
@@ -1952,6 +1983,8 @@ $("voiceBtn").addEventListener("click", () => {
   } else {
     voice.stop();
     ear.touch();
+    // 前に聞き取りを断られていても、🎤を押したらもう一度試す（許可を直したあと、開き直さなくていいように）
+    ear.blocked = false;
     ear.start("talk");
   }
 });
