@@ -391,6 +391,15 @@
     <button id="syncNowBtn" type="button">今すぐ共有</button>
     <p class="note" id="syncStatus"></p>
 
+    <label>Googleカレンダー</label>
+    <label for="calUrl">仲立ち（Apps Script）のURL</label>
+    <input type="text" id="calUrl" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec">
+    <label for="calKey">カレンダーの合言葉</label>
+    <input type="password" id="calKey" autocomplete="off" placeholder="Apps Scriptに書いた合言葉">
+    <p class="note">つなぐと、Googleカレンダーの2週間分の予定がマナの予定に出て、マナに頼んだ予定はGoogleカレンダーにも入るよ。</p>
+    <button id="calNowBtn" type="button">今すぐ読み込む</button>
+    <p class="note" id="calStatus"></p>
+
     <div class="row">
       <button id="closeBtn" type="button">閉じる</button>
       <button class="primary" id="saveBtn" type="button">保存</button>
@@ -442,6 +451,8 @@ const settings = {
   weatherPlace: store.get("weatherPlace", "金沢市"),
   syncToken: store.get("syncToken", ""),
   syncPass: store.get("syncPass", ""),
+  calUrl: store.get("calUrl", ""),
+  calKey: store.get("calKey", ""),
 };
 
 // ほかの端末との共有の状態（中身は「ほかの端末と共有」のところ）
@@ -1218,7 +1229,7 @@ function systemPrompt() {
 - 天気を聞かれたら get_weather を使います。場所を言われなかったら「${settings.weatherPlace || "金沢市"}」の天気を調べます（聞き返さない）。
 - 「〇分はかって」「〇時に教えて」と頼まれたら set_timer を使い、止めてと言われたら cancel_timer を使います。秒数は今の時刻から計算します。
 - 「明日10時に歯医者」のように予定を言われたら add_event で保存し、消してと言われたら delete_event を使います。数分〜数時間後に一度知らせるだけならタイマー、日時の決まった用事なら予定にします。
-- 予定を聞かれたら、下の「予定」を見て答えます。
+- 予定を聞かれたら、下の「予定」を見て答えます。${calendarOn() ? "\n- 予定にはGoogleカレンダーの予定も入っています。add_event で足すとGoogleカレンダーにも入り、delete_event で消すとGoogleカレンダーからも消えます。" : ""}
 
 # 今の日時
 ${now.toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short" })}`;
@@ -1582,6 +1593,7 @@ function renderEvents() {
       const index = events.findIndex((x) => x.id === e.id);
       if (index >= 0) events.splice(index, 1);
       saveEvents();
+      if (e.gid && calendarOn()) deleteFromGoogle(e).catch((err) => showCalStatus("Googleカレンダーから消せなかった（" + err.message + "）"));
     });
     li.append(span, btn);
     list.appendChild(li);
@@ -1803,13 +1815,34 @@ async function runTool(block) {
     addMessage("note", `⏰ セット：${label}（${at}）`);
     return { content: `番号${id}でセットしました。${at}に鳴ります。` };
   }
-  if (block.name === "add_event") return addEvent(input);
+  if (block.name === "add_event") {
+    const result = addEvent(input);
+    if (result.is_error || !calendarOn()) return result;
+    // いま足した予定（時刻の印がいちばん新しいもの）をGoogleカレンダーにも入れる
+    const added = events.reduce((a, e) => (!a || (e.ts || 0) > (a.ts || 0) ? e : a), null);
+    try {
+      await addToGoogle(added);
+      return { content: result.content + "（Googleカレンダーにも入れました）" };
+    } catch (err) {
+      console.error(err);
+      return { content: result.content + "（Googleカレンダーには入れられませんでした。マナの中には保存しています）" };
+    }
+  }
   if (block.name === "delete_event") {
     const index = events.findIndex((e) => e.id === input.id);
     if (index < 0) return { content: `番号${input.id}の予定は見つかりませんでした。`, is_error: true };
     const [removed] = events.splice(index, 1);
     saveEvents();
     addMessage("note", "📅 予定を消した：" + describeEvent(removed));
+    if (removed.gid && calendarOn()) {
+      try {
+        await deleteFromGoogle(removed);
+        return { content: `番号${input.id}を消しました（Googleカレンダーからも消しました）。` };
+      } catch (err) {
+        console.error(err);
+        return { content: `番号${input.id}をマナの中から消しました。Googleカレンダーからは消せませんでした。` };
+      }
+    }
     return { content: `番号${input.id}を消しました。` };
   }
   if (block.name === "cancel_timer") {
@@ -2016,6 +2049,9 @@ function openSettings() {
   $("syncToken").value = settings.syncToken;
   $("syncPass").value = settings.syncPass;
   showSyncStatus();
+  $("calUrl").value = settings.calUrl;
+  $("calKey").value = settings.calKey;
+  showCalStatus();
   $("rateValue").textContent = settings.rate;
   fillVoices();
   renderMemories();
@@ -2137,6 +2173,15 @@ $("saveBtn").addEventListener("click", () => {
     store.set("syncPass", syncPass);
     sync.key = null;
     scheduleSync(300);
+  }
+  const calUrl = $("calUrl").value.trim();
+  const calKey = $("calKey").value.trim();
+  if (calUrl !== settings.calUrl || calKey !== settings.calKey) {
+    settings.calUrl = calUrl;
+    settings.calKey = calKey;
+    store.set("calUrl", calUrl);
+    store.set("calKey", calKey);
+    refreshCalendar();
   }
   store.set("apiKey", settings.apiKey);
   store.set("model", settings.model);
@@ -2398,6 +2443,108 @@ async function refreshWeather() {
     $("weatherDays").textContent = "天気につながらなかったよ";
   }
 }
+
+// ===== Googleカレンダー（自分のGoogleに置いたApps Scriptを通して読み書きする） =====
+const CAL_DAYS = 14; // 読み込む日数
+
+function calendarOn() {
+  return Boolean(settings.calUrl && settings.calKey);
+}
+
+function showCalStatus(text) {
+  if (text) store.set("calStatus", text);
+  const el = $("calStatus");
+  if (el) el.textContent = calendarOn() ? store.get("calStatus", "まだ読み込んでないよ") : "URLと合言葉を入れるとつながるよ。";
+}
+
+async function calendarCall(params) {
+  const url = settings.calUrl + "?" + new URLSearchParams({ ...params, key: settings.calKey });
+  const data = JSON.parse(await fetchText(url, 20000));
+  if (data.error) throw new Error(data.error === "key" ? "合言葉がApps Scriptと違うみたい" : data.error);
+  return data;
+}
+
+async function addToGoogle(e) {
+  const allDay = !e.time;
+  const data = await calendarCall({
+    action: "add", title: e.title, start: String(e.startAt),
+    end: String(e.startAt + 60 * 60000), allDay: allDay ? "1" : "0",
+  });
+  e.gid = data.id;
+  saveEvents();
+}
+
+async function deleteFromGoogle(e) {
+  await calendarCall({ action: "delete", id: e.gid, start: String(e.startAt) });
+}
+
+// Googleカレンダーの予定を、マナの予定の形にする（知らせる時刻は、時刻ありは10分前、終日は朝8時）
+function eventFromGoogle(g, old) {
+  const d = new Date(g.start);
+  const pad = (x) => String(x).padStart(2, "0");
+  const remindAt = g.allDay ? new Date(d.getFullYear(), d.getMonth(), d.getDate(), 8, 0).getTime() : g.start - 10 * 60000;
+  return {
+    id: old ? old.id : 0,
+    title: g.title || "（名前なし）",
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: g.allDay ? "" : `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    startAt: g.start,
+    remindAt: old ? old.remindAt : remindAt,
+    endOfDay: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).getTime(),
+    notified: old ? old.notified : remindAt <= Date.now(),
+    before: old ? old.before : g.allDay ? 0 : 10,
+    gid: g.id,
+    ts: old ? old.ts : Date.now(),
+  };
+}
+
+let calBusy = false;
+async function refreshCalendar() {
+  if (!calendarOn()) {
+    showCalStatus();
+    return;
+  }
+  if (calBusy) return;
+  calBusy = true;
+  try {
+    const data = await calendarCall({ action: "list", days: String(CAL_DAYS) });
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    const to = from.getTime() + CAL_DAYS * 86400000;
+    const fresh = [];
+    for (const g of data.events || []) {
+      // 前から知っている予定（同じGoogleの予定か、名前と時刻が同じマナの予定）なら、番号や知らせ済みの印を引きつぐ
+      const old = events.find((e) => e.gid === g.id && e.startAt === g.start) ||
+        events.find((e) => !e.gid && e.title === g.title && e.startAt === g.start);
+      fresh.push(eventFromGoogle(g, old));
+    }
+    // Googleで消された予定は、マナからも消す（読み込んだ期間の分だけ）。Googleにない、マナだけの予定はそのまま
+    const keep = events.filter((e) => {
+      if (fresh.some((f) => f.title === e.title && f.startAt === e.startAt)) return false;
+      if (e.gid && e.startAt >= from.getTime() && e.startAt < to) return false;
+      return true;
+    });
+    events.splice(0, events.length, ...keep, ...fresh);
+    fixIds(events);
+    saveEvents();
+    const t = new Date();
+    showCalStatus(`読み込んだ（${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}、${fresh.length}件）`);
+  } catch (err) {
+    console.error(err);
+    showCalStatus("Googleカレンダーにつながらなかった（" + err.message + "）");
+  } finally {
+    calBusy = false;
+  }
+}
+
+$("calNowBtn").addEventListener("click", () => {
+  $("calStatus").textContent = "読み込んでる…";
+  refreshCalendar();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") refreshCalendar();
+});
+setInterval(refreshCalendar, 10 * 60000);
 
 // ===== ほかの端末と共有（GitHubのGistに、合言葉で鍵をかけて置く） =====
 // 置くのは 予定・覚えたこと・会話。消したものは「消した印（tomb）」を残して、ほかの端末でも消す
@@ -2667,6 +2814,7 @@ renderTimers();
 cleanOldEvents();
 renderEvents();
 scheduleSync(800);
+setTimeout(refreshCalendar, 1500);
 if (!settings.apiKey) openSettings();
 else if (openedByWatcher) wakeFromWatcher();
 </script>
