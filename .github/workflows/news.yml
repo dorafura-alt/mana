@@ -18,6 +18,7 @@ jobs:
         shell: python
         run: |
           import json, urllib.request, xml.etree.ElementTree as ET
+          from email.utils import parsedate_to_datetime
           from datetime import datetime, timezone, timedelta
 
           FEEDS = {
@@ -31,8 +32,18 @@ jobs:
               "スポーツ": "https://www.nhk.or.jp/rss/news/cat7.xml",
           }
           BACKUP = ("Yahoo!ニュース", "https://news.yahoo.co.jp/rss/topics/top-picks.xml")
+          # 石川県のニュース（Googleニュースで「石川県」を探した結果。新しい順に並べ直す）
+          LOCAL = ("石川", "Googleニュース（石川県）", "https://news.google.com/rss/search?q=%E7%9F%B3%E5%B7%9D%E7%9C%8C&hl=ja&gl=JP&ceid=JP:ja")
 
-          def read(url):
+          def newest_first(items):
+              def when(x):
+                  try:
+                      return parsedate_to_datetime(x["date"]).timestamp()
+                  except Exception:
+                      return 0
+              return sorted(items, key=when, reverse=True)
+
+          def read(url, limit=10):
               req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mana news bot)"})
               with urllib.request.urlopen(req, timeout=20) as res:
                   root = ET.fromstring(res.read())
@@ -41,7 +52,7 @@ jobs:
                   title = (item.findtext("title") or "").strip()
                   if title:
                       items.append({"title": title, "date": (item.findtext("pubDate") or "").strip()})
-              return items[:10]
+              return items[:limit]
 
           categories = {}
           for name, url in FEEDS.items():
@@ -51,6 +62,12 @@ jobs:
                       categories[name] = {"source": "NHKニュース", "items": items}
               except Exception as err:
                   print(name, "がダメだった:", err)
+          try:
+              items = newest_first(read(LOCAL[2], limit=40))[:10]
+              if items:
+                  categories[LOCAL[0]] = {"source": LOCAL[1], "items": items}
+          except Exception as err:
+              print("石川がダメだった:", err)
           if "主要" not in categories:
               try:
                   categories["主要"] = {"source": BACKUP[0], "items": read(BACKUP[1])}
