@@ -117,6 +117,7 @@
   .hud-list li:last-child { border-bottom: none; }
   .hud-list .when { font-family: var(--hud-font); font-size: 12px; color: var(--accent); margin-right: 6px; }
   #weatherNow { font-size: 22px; color: var(--text); }
+  #newsList li { font-size: 13px; }
   .panel:has(#timers:empty) { display: none; }
   .panel #timers { flex-direction: column; }
   .panel .timer { border-radius: 6px; justify-content: space-between; }
@@ -143,7 +144,7 @@
     .hud-list li:nth-child(n+2) { display: none; }
     .hud-list li { padding: 0; font-size: 13px; }
     /* 会話中は予定の帯をしまって、会話を広く見せる */
-    body.awake .hud-side.left .panel:nth-child(3) { display: none; }
+    body.awake .hud-side.left .panel:nth-child(3), body.awake #newsPanel { display: none; }
   }
   @keyframes breathe {
     0%, 100% { opacity: 0.3; }
@@ -274,6 +275,10 @@
   <div class="panel">
     <div class="panel-title">SCHEDULE</div>
     <ul class="hud-list" id="planList"></ul>
+  </div>
+  <div class="panel" id="newsPanel">
+    <div class="panel-title">NEWS 石川</div>
+    <ul class="hud-list" id="newsList"><li class="sub">読み込み中…</li></ul>
   </div>
   <div class="panel">
     <div class="panel-title">TIMER</div>
@@ -681,12 +686,21 @@ const voice = {
     }
   },
 
+  // 「おまかせ」のときに選ぶ声。読み間違いの少ない自然な声を優先する
+  // （EdgeのNanamiなど「Natural / Online」の声 → Chromeの「Google 日本語」 → その他）
+  bestVoice() {
+    const list = this.japaneseVoices();
+    return list.find((v) => /Nanami/i.test(v.name) && /(Natural|Online)/i.test(v.name)) ||
+      list.find((v) => /(Natural|Online)/i.test(v.name)) ||
+      list.find((v) => /Google/i.test(v.name)) || null;
+  },
+
   speakOne(sentence) {
     return new Promise((resolve) => {
       const u = new SpeechSynthesisUtterance(sentence);
       u.lang = "ja-JP";
       u.rate = settings.rate;
-      const chosen = this.japaneseVoices().find((v) => v.voiceURI === settings.voiceURI);
+      const chosen = this.japaneseVoices().find((v) => v.voiceURI === settings.voiceURI) || this.bestVoice();
       if (chosen) u.voice = chosen;
       u.onend = resolve;
       u.onerror = resolve;
@@ -1268,7 +1282,7 @@ function systemPrompt() {
 - 「〇分はかって」「〇時に教えて」と頼まれたら set_timer を使い、止めてと言われたら cancel_timer を使います。秒数は今の時刻から計算します。
 - 「明日10時に歯医者」のように予定を言われたら add_event で保存し、消してと言われたら delete_event を使います。数分〜数時間後に一度知らせるだけならタイマー、日時の決まった用事なら予定にします。
 - 予定を聞かれたら、下の「予定」を見て答えます。
-- 朝のあいさつを頼まれたら、get_weather で今日の天気、下の「予定」から今日の予定、get_news（主要）から大事そうなニュースを3つくらい、合わせて短くまとめて話します。${calendarOn() ? "\n- 予定にはGoogleカレンダーの予定も入っています。add_event で足すとGoogleカレンダーにも入り、delete_event で消すとGoogleカレンダーからも消えます。" : ""}
+- 朝のあいさつを頼まれたら、get_weather で今日の天気、下の「予定」から今日の予定、get_news（石川）から石川県のニュースを2〜3つ、get_news（主要）から全国の大きなニュースを1つ、合わせて短くまとめて話します。${calendarOn() ? "\n- 予定にはGoogleカレンダーの予定も入っています。add_event で足すとGoogleカレンダーにも入り、delete_event で消すとGoogleカレンダーからも消えます。" : ""}
 
 # 今の日時
 ${now.toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short" })}`;
@@ -1333,8 +1347,8 @@ const TOOLS = [
       properties: {
         category: {
           type: "string",
-          enum: ["主要", "社会", "政治", "経済", "国際", "スポーツ", "科学・医療", "文化・エンタメ"],
-          description: "ニュースの種類。特に言われなければ「主要」",
+          enum: ["石川", "主要", "社会", "政治", "経済", "国際", "スポーツ", "科学・医療", "文化・エンタメ"],
+          description: "ニュースの種類。「石川」は石川県のニュース。特に言われなければ「石川」。全国のニュースと言われたら「主要」",
         },
       },
       required: ["category"],
@@ -1431,6 +1445,7 @@ async function searchWikipedia(query) {
 // ブラウザのページからニュースサイトに直接はつなげないので、無料の中継サービスを通して読む。
 // 中継サービスは他の人が運営しているので、止まっていたら次を試し、全部ダメならWikipediaを読む。
 const NEWS_FEEDS = {
+  "石川": "https://news.google.com/rss/search?q=%E7%9F%B3%E5%B7%9D%E7%9C%8C&hl=ja&gl=JP&ceid=JP:ja",
   "主要": "https://www.nhk.or.jp/rss/news/cat0.xml",
   "社会": "https://www.nhk.or.jp/rss/news/cat1.xml",
   "文化・エンタメ": "https://www.nhk.or.jp/rss/news/cat2.xml",
@@ -1499,7 +1514,7 @@ function newsJsonUrls() {
   return urls;
 }
 
-async function newsFromGithub(category) {
+async function loadNewsJson() {
   let best = null;
   for (const url of newsJsonUrls()) {
     try {
@@ -1509,6 +1524,11 @@ async function newsFromGithub(category) {
       console.warn("news.json が読めなかった", err);
     }
   }
+  return best;
+}
+
+async function newsFromGithub(category) {
+  const best = await loadNewsJson();
   if (!best) return null;
   const hit = best.categories[category] ?? best.categories["主要"];
   if (!hit || !hit.items?.length) return null;
@@ -1516,6 +1536,26 @@ async function newsFromGithub(category) {
   const ago = Math.round((Date.now() - when.getTime()) / 60000);
   const age = Number.isNaN(ago) ? "" : ago < 90 ? `${ago}分前に集めた見出し` : `${Math.round(ago / 60)}時間前に集めた見出し`;
   return `出どころ：${hit.source}（${best.categories[category] ? category : "主要"}、${age}）\n` + hit.items.map((x) => `・${x.title}`).join("\n");
+}
+
+// 画面の「NEWS 石川」に見出しを出す（30分ごと）
+async function refreshNewsPanel() {
+  const list = $("newsList");
+  const data = await loadNewsJson();
+  const hit = data?.categories["石川"];
+  list.innerHTML = "";
+  if (!hit?.items?.length) {
+    const li = document.createElement("li");
+    li.className = "sub";
+    li.textContent = "まだ石川のニュースがないよ";
+    list.appendChild(li);
+    return;
+  }
+  for (const item of hit.items.slice(0, 4)) {
+    const li = document.createElement("li");
+    li.textContent = item.title.replace(/\s+-\s+[^-]+$/, ""); // 末尾の「 - 新聞社名」は画面では省く
+    list.appendChild(li);
+  }
 }
 
 async function getNews(category) {
@@ -2150,7 +2190,8 @@ $("clearHistoryBtn").addEventListener("click", () => {
 
 function fillVoices() {
   const select = $("voiceSelect");
-  select.innerHTML = '<option value="">おまかせ</option>';
+  const best = voice.bestVoice();
+  select.innerHTML = `<option value="">おまかせ${best ? "（" + best.name + "）" : ""}</option>`;
   for (const v of voice.japaneseVoices()) {
     const option = document.createElement("option");
     option.value = v.voiceURI;
@@ -2915,6 +2956,8 @@ cleanOldEvents();
 renderEvents();
 scheduleSync(800);
 setTimeout(refreshCalendar, 1500);
+refreshNewsPanel();
+setInterval(refreshNewsPanel, 30 * 60000);
 if (!settings.apiKey) openSettings();
 else if (openedByWatcher) wakeFromWatcher();
 </script>
