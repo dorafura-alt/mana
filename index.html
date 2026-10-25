@@ -1668,6 +1668,24 @@ async function getWeather(place) {
   return lines.join("\n");
 }
 
+// ===== 新しいマナが上がっていたら読み直す =====
+// ブラウザが古いページを覚えていて、更新したのに古いマナが出ることがあるため。
+// 直すたびにこの番号を変える
+const APP_VERSION = "2026-10-25a";
+async function checkNewVersion() {
+  try {
+    const res = await fetch(location.href, { cache: "reload" }); // 取り直して、ブラウザの覚えている分も新しくする
+    const text = await res.text();
+    const latest = text.match(/const APP_VERSION = "([^"]+)"/)?.[1];
+    if (latest && latest !== APP_VERSION && store.get("reloadedFor", "") !== latest) {
+      store.set("reloadedFor", latest); // 何度も読み直し続けないように
+      location.reload();
+    }
+  } catch (err) {
+    console.warn("新しい版の確認ができなかった", err);
+  }
+}
+
 // ===== 買い物・やることリスト =====
 // { id, list: "買い物" か "やること", text, ts }。済んだら消す（共有でほかの端末からも消える）
 const LIST_NAMES = ["買い物", "やること"];
@@ -3076,6 +3094,7 @@ renderTimers();
 cleanOldEvents();
 renderEvents();
 renderLists();
+checkNewVersion();
 scheduleSync(800);
 setTimeout(refreshCalendar, 1500);
 refreshNewsPanel();
