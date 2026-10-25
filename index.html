@@ -1527,6 +1527,17 @@ async function loadNewsJson() {
   return best;
 }
 
+// 同じ出来事を別の新聞社が書いた見出しは1つにまとめる（はじめの12文字をくらべる）
+function uniqueNews(items) {
+  const seen = new Set();
+  return items.filter((x) => {
+    const key = x.title.normalize("NFKC").replace(/[\s　、。・「」『』【】()（）\-~〜～]/g, "").slice(0, 12);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function newsFromGithub(category) {
   const best = await loadNewsJson();
   if (!best) return null;
@@ -1535,7 +1546,7 @@ async function newsFromGithub(category) {
   const when = new Date(best.updated);
   const ago = Math.round((Date.now() - when.getTime()) / 60000);
   const age = Number.isNaN(ago) ? "" : ago < 90 ? `${ago}分前に集めた見出し` : `${Math.round(ago / 60)}時間前に集めた見出し`;
-  return `出どころ：${hit.source}（${best.categories[category] ? category : "主要"}、${age}）\n` + hit.items.map((x) => `・${x.title}`).join("\n");
+  return `出どころ：${hit.source}（${best.categories[category] ? category : "主要"}、${age}）\n` + uniqueNews(hit.items).map((x) => `・${x.title}`).join("\n");
 }
 
 // 画面の「NEWS 石川」に見出しを出す（30分ごと）
@@ -1551,7 +1562,7 @@ async function refreshNewsPanel() {
     list.appendChild(li);
     return;
   }
-  for (const item of hit.items.slice(0, 4)) {
+  for (const item of uniqueNews(hit.items).slice(0, 4)) {
     const li = document.createElement("li");
     li.textContent = item.title.replace(/\s+-\s+[^-]+$/, ""); // 末尾の「 - 新聞社名」は画面では省く
     list.appendChild(li);
