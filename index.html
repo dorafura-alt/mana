@@ -118,6 +118,9 @@
   .hud-list .when { font-family: var(--hud-font); font-size: 12px; color: var(--accent); margin-right: 6px; }
   #weatherNow { font-size: 22px; color: var(--text); }
   #newsList li { font-size: 13px; }
+  #listList li { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #listList li .tag { font-family: var(--hud-font); font-size: 10px; color: var(--accent); border: 1px solid var(--line); padding: 0 4px; }
+  #listList li:hover { color: var(--accent); }
   .panel:has(#timers:empty) { display: none; }
   .panel #timers { flex-direction: column; }
   .panel .timer { border-radius: 6px; justify-content: space-between; }
@@ -144,7 +147,7 @@
     .hud-list li:nth-child(n+2) { display: none; }
     .hud-list li { padding: 0; font-size: 13px; }
     /* 会話中は予定の帯をしまって、会話を広く見せる */
-    body.awake .hud-side.left .panel:nth-child(3), body.awake #newsPanel { display: none; }
+    body.awake .hud-side.left .panel:nth-child(3), body.awake #newsPanel, body.awake #listPanel { display: none; }
   }
   @keyframes breathe {
     0%, 100% { opacity: 0.3; }
@@ -276,6 +279,10 @@
     <div class="panel-title">SCHEDULE</div>
     <ul class="hud-list" id="planList"></ul>
   </div>
+  <div class="panel" id="listPanel">
+    <div class="panel-title">LIST</div>
+    <ul class="hud-list" id="listList"></ul>
+  </div>
   <div class="panel" id="newsPanel">
     <div class="panel-title">NEWS 石川</div>
     <ul class="hud-list" id="newsList"><li class="sub">読み込み中…</li></ul>
@@ -391,7 +398,7 @@
     <button id="clearHistoryBtn" type="button">会話の履歴を消す</button>
     <p class="note">消すと前の会話の続きは話せなくなるよ（覚えていることは消えない）。</p>
 
-    <label>ほかの端末と共有（予定・覚えたこと・会話）</label>
+    <label>ほかの端末と共有（予定・覚えたこと・リスト・会話）</label>
     <label for="syncToken">GitHubのトークン</label>
     <input type="password" id="syncToken" autocomplete="off" placeholder="ghp_...">
     <label for="syncPass">共有の合言葉</label>
@@ -413,7 +420,7 @@
     <button id="exportBtn" type="button">ファイルに書き出す</button>
     <button id="importBtn" type="button">ファイルから読み込む</button>
     <input type="file" id="importFile" accept=".json,application/json" hidden>
-    <p class="note" id="exportStatus">予定・覚えたこと・会話・天気の場所をファイルにして、別の端末や引っ越し先に移せるよ。キーや合言葉は入れないから、それは手で入れ直してね。読み込むと、今あるものに足される（消えない）。</p>
+    <p class="note" id="exportStatus">予定・覚えたこと・リスト・会話・天気の場所をファイルにして、別の端末や引っ越し先に移せるよ。キーや合言葉は入れないから、それは手で入れ直してね。読み込むと、今あるものに足される（消えない）。</p>
 
     <div class="row">
       <button id="closeBtn" type="button">閉じる</button>
@@ -1282,6 +1289,7 @@ function systemPrompt() {
 - 「〇分はかって」「〇時に教えて」と頼まれたら set_timer を使い、止めてと言われたら cancel_timer を使います。秒数は今の時刻から計算します。
 - 「明日10時に歯医者」のように予定を言われたら add_event で保存し、消してと言われたら delete_event を使います。数分〜数時間後に一度知らせるだけならタイマー、日時の決まった用事なら予定にします。
 - 予定を聞かれたら、下の「予定」を見て答えます。
+- 「牛乳を買い物リストに入れて」「〇〇をやることに入れて」と頼まれたら add_list_item を使います。「牛乳買った」「〇〇終わった」「リストから消して」と言われたら remove_list_items で消します。リストを聞かれたら、下の「リスト」を見て答えます。
 - 朝のあいさつを頼まれたら、get_weather で今日の天気、下の「予定」から今日の予定、get_news（石川）から石川県のニュースを2〜3つ、get_news（主要）から全国の大きなニュースを1つ、合わせて短くまとめて話します。${calendarOn() ? "\n- 予定にはGoogleカレンダーの予定も入っています。add_event で足すとGoogleカレンダーにも入り、delete_event で消すとGoogleカレンダーからも消えます。" : ""}
 
 # 今の日時
@@ -1293,6 +1301,9 @@ ${now.toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short" })}`;
     prompt += "\n\n# 動いているタイマー（[ ]の中は番号）\n" +
       timers.map((t) => `[${t.id}] ${t.label}（${new Date(t.endAt).toLocaleTimeString("ja-JP", { timeStyle: "short" })}に鳴る）`).join("\n");
   }
+  prompt += "\n\n# リスト（[ ]の中は番号）\n" + (lists.length
+    ? LIST_NAMES.map((name) => `${name}：` + (lists.filter((x) => x.list === name).map((x) => `[${x.id}] ${x.text}`).join("、") || "なし")).join("\n")
+    : "（リストは空です）");
   if (memories.length) {
     prompt += "\n\n# マナが覚えていること（[ ]の中は番号）\n" +
       memories.map((m) => `[${m.id}] ${m.text}（${m.at}に覚えた）`).join("\n");
@@ -1301,6 +1312,31 @@ ${now.toLocaleString("ja-JP", { dateStyle: "full", timeStyle: "short" })}`;
 }
 
 const TOOLS = [
+  {
+    name: "add_list_item",
+    description: "買い物リストか、やることリストに足す。",
+    input_schema: {
+      type: "object",
+      properties: {
+        list: { type: "string", enum: ["買い物", "やること"], description: "どちらのリストか" },
+        items: { type: "array", items: { type: "string" }, description: "足すもの。短く。例：[\"牛乳\", \"卵\"]" },
+      },
+      required: ["list", "items"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "remove_list_items",
+    description: "リストから消す（買った・終わった・いらなくなった）。番号は「リスト」の[ ]の中の番号。",
+    input_schema: {
+      type: "object",
+      properties: {
+        ids: { type: "array", items: { type: "integer" }, description: "消す番号" },
+      },
+      required: ["ids"],
+      additionalProperties: false,
+    },
+  },
   {
     name: "remember",
     description: "りゅうさんについて覚えておくことを1つ保存する。りゅうさんに覚えておいてと頼まれたときに使う。",
@@ -1632,6 +1668,46 @@ async function getWeather(place) {
   return lines.join("\n");
 }
 
+// ===== 買い物・やることリスト =====
+// { id, list: "買い物" か "やること", text, ts }。済んだら消す（共有でほかの端末からも消える）
+const LIST_NAMES = ["買い物", "やること"];
+const lists = loadList("lists");
+
+function saveLists() {
+  store.set("lists", JSON.stringify(lists));
+  renderLists();
+  scheduleSync();
+}
+
+function renderLists() {
+  const ul = $("listList");
+  if (!ul) return;
+  ul.innerHTML = "";
+  if (!lists.length) {
+    const li = document.createElement("li");
+    li.className = "sub";
+    li.textContent = "「牛乳を買い物リストに」と話しかけてね";
+    ul.appendChild(li);
+    return;
+  }
+  for (const name of LIST_NAMES) {
+    for (const item of lists.filter((x) => x.list === name)) {
+      const li = document.createElement("li");
+      li.title = "押すと消える（済んだ）";
+      const tag = document.createElement("span");
+      tag.className = "tag";
+      tag.textContent = name === "買い物" ? "買" : "やる";
+      li.append(tag, document.createTextNode(item.text));
+      li.addEventListener("click", () => {
+        const index = lists.findIndex((x) => x.list === item.list && x.text === item.text);
+        if (index >= 0) lists.splice(index, 1);
+        saveLists();
+      });
+      ul.appendChild(li);
+    }
+  }
+}
+
 // ===== 予定 =====
 // { id, title, date: "YYYY-MM-DD", time: "HH:MM" か ""（終日）, startAt, remindAt, endOfDay, notified }
 // 時刻はすべてミリ秒。日付の早い順に並べて保存する
@@ -1940,6 +2016,30 @@ async function runTool(block) {
     if (!removed) return { content: `番号${input.id}のタイマーは見つかりませんでした。`, is_error: true };
     addMessage("note", "⏰ 止めた：" + removed.label);
     return { content: `番号${input.id}を止めました。` };
+  }
+  if (block.name === "add_list_item") {
+    const name = LIST_NAMES.includes(input.list) ? input.list : "やること";
+    const added = [];
+    for (const raw of Array.isArray(input.items) ? input.items : []) {
+      const text = String(raw).trim();
+      if (!text || lists.some((x) => x.list === name && x.text === text)) continue;
+      lists.push({ id: 0, list: name, text, ts: Date.now() });
+      added.push(text);
+    }
+    fixIds(lists);
+    saveLists();
+    if (!added.length) return { content: "足すものがなかった（もう入っているか、空でした）。" };
+    addMessage("note", `🛒 ${name}リストに足した：` + added.join("、"));
+    return { content: `${name}リストに足しました：${added.join("、")}` };
+  }
+  if (block.name === "remove_list_items") {
+    const ids = Array.isArray(input.ids) ? input.ids.map(Number) : [];
+    const removed = lists.filter((x) => ids.includes(x.id));
+    if (!removed.length) return { content: "その番号はリストにありませんでした。", is_error: true };
+    lists.splice(0, lists.length, ...lists.filter((x) => !ids.includes(x.id)));
+    saveLists();
+    addMessage("note", "✔ リストから消した：" + removed.map((x) => x.text).join("、"));
+    return { content: "消しました：" + removed.map((x) => x.text).join("、") };
   }
   if (block.name === "remember") {
     const fact = typeof input.fact === "string" ? input.fact.trim() : "";
@@ -2635,7 +2735,7 @@ async function refreshCalendar() {
 $("exportBtn").addEventListener("click", () => {
   const data = {
     app: "mana", v: 1, exportedAt: new Date().toISOString(),
-    memories, events, history, weatherPlace: settings.weatherPlace,
+    memories, events, history, lists, weatherPlace: settings.weatherPlace,
   };
   const blob = new Blob([JSON.stringify(data, null, 1)], { type: "application/json" });
   const a = document.createElement("a");
@@ -2663,6 +2763,10 @@ $("importFile").addEventListener("change", async (e) => {
     fixIds(mergedMemories);
     const mergedEvents = mergeList(events, (data.events || []).filter((x) => x.endOfDay >= Date.now()), eventKey, {});
     fixIds(mergedEvents);
+    const mergedLists = mergeList(lists, data.lists || [], listKey, {});
+    fixIds(mergedLists);
+    lists.splice(0, lists.length, ...mergedLists);
+    saveLists();
     const historyMap = new Map();
     for (const h of [...(data.history || []), ...history]) historyMap.set(historyKey(h), h);
     const mergedHistory = [...historyMap.values()].sort((a, b) => (a.t || 0) - (b.t || 0)).slice(-MAX_SAVED);
@@ -2709,6 +2813,7 @@ function syncOn() {
 
 const memKey = (m) => "m:" + m.text;
 const eventKey = (e) => "e:" + e.title + "|" + e.startAt;
+const listKey = (x) => "l:" + x.list + "|" + x.text;
 const historyKey = (h) => (h.t || 0) + "|" + h.role + "|" + h.content;
 
 function scheduleSync(delay = 4000) {
@@ -2838,7 +2943,7 @@ async function runSync() {
   sync.busy = true;
   try {
     let id = await findSyncGist();
-    let remote = { memories: [], events: [], history: [], tomb: {}, clearedAt: 0 };
+    let remote = { memories: [], events: [], history: [], lists: [], tomb: {}, clearedAt: 0 };
     let salt = crypto.getRandomValues(new Uint8Array(16));
     let remoteText = "";
     if (id) {
@@ -2864,7 +2969,7 @@ async function runSync() {
     const tomb = { ...(remote.tomb || {}) };
     let seen = [];
     try { seen = JSON.parse(store.get("syncSeen", "[]")); } catch { /* 読めなければ印なし */ }
-    const here = new Set([...memories.map(memKey), ...events.map(eventKey)]);
+    const here = new Set([...memories.map(memKey), ...events.map(eventKey), ...lists.map(listKey)]);
     for (const key of seen) if (!here.has(key)) tomb[key] = Math.max(tomb[key] || 0, now);
     for (const key of Object.keys(tomb)) if (tomb[key] < now - TOMB_DAYS * 86400000) delete tomb[key];
 
@@ -2874,6 +2979,9 @@ async function runSync() {
     const mergedEvents = mergeList(events, remote.events || [], eventKey, tomb, (a, b) => ({ ...b, notified: a.notified || b.notified }));
     mergedEvents.sort((a, b) => a.startAt - b.startAt);
     fixIds(mergedEvents);
+    const mergedLists = mergeList(lists, remote.lists || [], listKey, tomb);
+    mergedLists.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    fixIds(mergedLists);
 
     const clearedAt = Math.max(Number(store.get("historyClearedAt", "0")) || 0, remote.clearedAt || 0);
     const historyMap = new Map();
@@ -2890,6 +2998,8 @@ async function runSync() {
       saveMemories();
       events.splice(0, events.length, ...mergedEvents);
       saveEvents();
+      lists.splice(0, lists.length, ...mergedLists);
+      saveLists();
       history.splice(0, history.length, ...mergedHistory);
       saveHistory();
       store.set("historyClearedAt", String(clearedAt));
@@ -2902,8 +3012,8 @@ async function runSync() {
     }
 
     // 変わったところがあればGistに置く
-    const payload = { memories: mergedMemories, events: mergedEvents, history: mergedHistory, tomb, clearedAt };
-    const sameAsRemote = remoteText && JSON.stringify(payload) === JSON.stringify({ memories: remote.memories, events: remote.events, history: remote.history, tomb: remote.tomb, clearedAt: remote.clearedAt });
+    const payload = { memories: mergedMemories, events: mergedEvents, history: mergedHistory, lists: mergedLists, tomb, clearedAt };
+    const sameAsRemote = remoteText && JSON.stringify(payload) === JSON.stringify({ memories: remote.memories, events: remote.events, history: remote.history, lists: remote.lists, tomb: remote.tomb, clearedAt: remote.clearedAt });
     if (!sameAsRemote) {
       const content = await lockData(payload, salt);
       const files = { [SYNC_FILE]: { content } };
@@ -2915,7 +3025,7 @@ async function runSync() {
         store.set("syncGist", created.id);
       }
     }
-    store.set("syncSeen", JSON.stringify([...mergedMemories.map(memKey), ...mergedEvents.map(eventKey)]));
+    store.set("syncSeen", JSON.stringify([...mergedMemories.map(memKey), ...mergedEvents.map(eventKey), ...mergedLists.map(listKey)]));
     const t = new Date();
     showSyncStatus(`共有した（${t.getHours()}:${String(t.getMinutes()).padStart(2, "0")}）`);
   } catch (err) {
@@ -2965,6 +3075,7 @@ refreshWeather();
 renderTimers();
 cleanOldEvents();
 renderEvents();
+renderLists();
 scheduleSync(800);
 setTimeout(refreshCalendar, 1500);
 refreshNewsPanel();
